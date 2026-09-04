@@ -80,6 +80,27 @@ async fn repair_game(app: AppHandle, game_id: String, install_root: String) -> R
     Ok(serde_json::json!({ "gameId": game_id, "repairedFiles": repaired_files }))
 }
 
+#[tauri::command]
+async fn update_game(app: AppHandle, manifest_json: String, install_root: String) -> Result<serde_json::Value, String> {
+    let manifest: nordiee_core::GameManifest = serde_json::from_str(&manifest_json)
+        .map_err(|_| "The game build manifest is invalid.".to_string())?;
+    manifest.validate().map_err(|error| error.to_string())?;
+    let game_directory = PathBuf::from(&install_root).join(&manifest.game_id);
+    if !tokio::fs::try_exists(game_directory.join(".nordiee-install.json")).await.map_err(|error| error.to_string())? {
+        return Err("This game is not installed by Nordiee.".to_string());
+    }
+    let mut changed_files = HashSet::new();
+    for file in &manifest.files {
+        let path = safe_install_path(&game_directory, &file.path)?;
+        if !matches!(hash_file(&path).await, Ok(hash) if hash == file.sha256.to_ascii_lowercase()) {
+            changed_files.insert(file.path.clone());
+        }
+    }
+    let changed_file_count = changed_files.len();
+    download_manifest(&app, &manifest, &install_root, Some(&changed_files)).await?;
+    Ok(serde_json::json!({ "gameId": manifest.game_id, "version": manifest.version, "changedFiles": changed_file_count }))
+}
+
 async fn download_manifest(app: &AppHandle, manifest: &nordiee_core::GameManifest, install_root: &str, selected_files: Option<&HashSet<String>>) -> Result<serde_json::Value, String> {
     let game_directory = PathBuf::from(install_root).join(&manifest.game_id);
     tokio::fs::create_dir_all(&game_directory).await.map_err(|error| error.to_string())?;
@@ -243,7 +264,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .invoke_handler(tauri::generate_handler![launcher_version, default_install_root, save_account_secret, load_account_secret, remove_account_secret, install_game, repair_game, verify_game, installed_game_version, uninstall_game, launch_game])
+        .invoke_handler(tauri::generate_handler![launcher_version, default_install_root, save_account_secret, load_account_secret, remove_account_secret, install_game, repair_game, update_game, verify_game, installed_game_version, uninstall_game, launch_game])
         .run(tauri::generate_context!())
         .expect("error while running Nordiee Launcher");
 }
