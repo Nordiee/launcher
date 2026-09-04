@@ -490,6 +490,12 @@ function Library({ accessToken, onDownload, onNotify, runningGameIds }: { access
     if (processingTransferRef.current) onNotify("Added to queue", `${game.title} will ${kind === "install" ? "install" : kind === "repair" ? "repair" : "update"} after the active transfer.`, "info");
     void processTransferQueue();
   };
+  const clearTransferQueue = () => {
+    if (!queuedTransfersRef.current.length) return;
+    queuedTransfersRef.current = [];
+    setQueuedTransfers([]);
+    onNotify("Transfer queue cleared", "The active transfer continues and partial files stay safe.", "info");
+  };
   const openInstallDialog = async (game: LibraryGame) => {
     setInstallError("");
     try {
@@ -504,7 +510,7 @@ function Library({ accessToken, onDownload, onNotify, runningGameIds }: { access
   if (status === "error") return <section className="library-state"><div className="empty-mark" aria-hidden="true">N</div><h2>We could not load your library</h2><p>Check your connection, then try again.</p><button className="primary-button" type="button" onClick={() => void loadLibrary()}>Try again</button></section>;
   const offlineNotice = status === "offline" ? <p className="offline-notice" role="status">Offline mode - showing the last library saved on this device.</p> : null;
   if (!games.length) return <>{offlineNotice}<section className="empty-state"><div className="empty-mark" aria-hidden="true">N</div><h2>Your library is ready</h2><p>Games connected to your Nordiee account will appear here.</p></section></>;
-  const queueNotice = queuedTransfers.length ? <p className="queue-notice" role="status">{queuedTransfers.length} {queuedTransfers.length === 1 ? "game is" : "games are"} waiting in the transfer queue.</p> : null;
+  const queueNotice = queuedTransfers.length ? <div className="queue-notice" role="status"><span>{queuedTransfers.length} {queuedTransfers.length === 1 ? "game is" : "games are"} waiting in the transfer queue.</span><button className="text-button" type="button" onClick={clearTransferQueue}>Clear queue</button></div> : null;
   return <>{offlineNotice}{queueNotice}{installError && <p className="install-error" role="alert">{installError}</p>}<section className="library-grid" aria-label="Your game library">{games.map((game) => {
     const isInstalling = installingId === game.id;
     const isQueued = queuedTransfers.some((transfer) => transfer.game.id === game.id);
