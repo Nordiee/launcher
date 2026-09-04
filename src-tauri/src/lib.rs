@@ -3,7 +3,8 @@ use futures_util::StreamExt;
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use tauri::{AppHandle, Emitter};
+use std::sync::{Arc, Mutex};
+use tauri::{AppHandle, Emitter, State};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 #[tauri::command]
@@ -19,6 +20,8 @@ fn default_install_root() -> Result<String, String> {
 }
 
 const ACCOUNT_SECRET_SERVICE: &str = "com.nordiee.launcher.account";
+
+struct RunningGames(Arc<Mutex<HashSet<String>>>);
 
 fn account_entry(email: &str) -> Result<Entry, String> {
     Entry::new(ACCOUNT_SECRET_SERVICE, email).map_err(|error| error.to_string())
@@ -233,7 +236,7 @@ async fn uninstall_game(game_id: String, install_root: String) -> Result<(), Str
 }
 
 #[tauri::command]
-async fn launch_game(game_id: String, install_root: String) -> Result<(), String> {
+async fn launch_game(app: AppHandle, running_games: State<'_, RunningGames>, game_id: String, install_root: String) -> Result<(), String> {
     if !safe_game_id(&game_id) {
         return Err("The game identifier is invalid.".to_string());
     }
@@ -248,7 +251,22 @@ async fn launch_game(game_id: String, install_root: String) -> Result<(), String
     if !tokio::fs::try_exists(&executable).await.map_err(|error| error.to_string())? {
         return Err("The game's launch file is missing. Run Verify files or Repair files.".to_string());
     }
-    std::process::Command::new(executable).current_dir(game_directory).spawn().map_err(|error| error.to_string())?;
+    if running_games.0.lock().map_err(|_| "The game process tracker is unavailable.")?.contains(&game_id) {
+        return Err("This game is already running.".to_string());
+    }
+    let mut process = std::process::Command::new(executable).current_dir(game_directory).spawn().map_err(|error| error.to_string())?;
+    running_games.0.lock().map_err(|_| "The game process tracker is unavailable.")?.insert(game_id.clone());
+    let tracked_games = running_games.0.clone();
+    let completed_game_id = game_id.clone();
+    let completed_app = app.clone();
+    std::thread::spawn(move || {
+        let _ = process.wait();
+        if let Ok(mut games) = tracked_games.lock() {
+            games.remove(&completed_game_id);
+        }
+        let _ = completed_app.emit("game-running-state", serde_json::json!({ "gameId": completed_game_id, "running": false }));
+    });
+    let _ = app.emit("game-running-state", serde_json::json!({ "gameId": game_id, "running": true }));
     Ok(())
 }
 
@@ -300,6 +318,7 @@ fn safe_game_id(game_id: &str) -> bool {
 
 pub fn run() {
     tauri::Builder::default()
+        .manage(RunningGames(Arc::new(Mutex::new(HashSet::new()))))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![launcher_version, default_install_root, save_account_secret, load_account_secret, remove_account_secret, install_game, repair_game, update_game, verify_game, installed_game_version, uninstall_game, launch_game])
