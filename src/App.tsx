@@ -14,6 +14,7 @@ type AuthResponse = { accessToken: string; refreshToken: string; username: strin
 type AccessView = "accounts" | "credentials";
 type VerificationState = "verifying" | "verified" | "repair";
 type DownloadActivity = { gameId: string; title: string; phase: string; downloadedBytes?: number; totalBytes?: number; speedBytesPerSecond?: number; sampledAt?: number };
+type DiagnosticResult = "idle" | "checking" | "pass" | "fail";
 
 const API_BASE_URL = "https://api.nordiee.com/api/v1/auth";
 const LIBRARY_API_URL = "https://api.nordiee.com/api/v1/library";
@@ -356,8 +357,20 @@ function EmptyState({ title, text, action }: { title: string; text: string; acti
 function Settings() {
   const [installRootValue, setInstallRootValue] = useState(() => localStorage.getItem("nordiee.installRoot") ?? "");
   const [autoUpdateGames, setAutoUpdateGames] = useState(() => localStorage.getItem("nordiee.autoUpdateGames") !== "false");
+  const [diagnostics, setDiagnostics] = useState<Record<string, DiagnosticResult>>({ api: "idle", downloads: "idle", storage: "idle" });
   useEffect(() => { if (!installRootValue) void installRoot().then(setInstallRootValue); }, [installRootValue]);
   const saveInstallRoot = (value: string) => { setInstallRootValue(value); if (value.trim()) localStorage.setItem("nordiee.installRoot", value.trim()); else localStorage.removeItem("nordiee.installRoot"); };
   const setAutoUpdate = (enabled: boolean) => { setAutoUpdateGames(enabled); localStorage.setItem("nordiee.autoUpdateGames", String(enabled)); };
-  return <section className="settings"><article className="panel"><p className="panel-label">LAUNCHER</p><h3>Application settings</h3><div className="setting-row"><div><strong>Launch at startup</strong><small>Start Nordiee when you sign in to Windows.</small></div><button className="toggle" type="button" aria-label="Launch at startup, disabled" /></div><div className="setting-row"><div><strong>Game install location</strong><small>Games install beside Nordiee in the NordieeApps folder by default.</small></div><label className="path-field"><span className="sr-only">Game install location</span><input value={installRootValue} onChange={(event) => saveInstallRoot(event.target.value)} spellCheck="false" /></label></div><div className="setting-row"><div><strong>Automatically update games</strong><small>Check installed games when Nordiee opens and download changed files.</small></div><button className={autoUpdateGames ? "toggle enabled" : "toggle"} type="button" aria-pressed={autoUpdateGames} aria-label="Automatically update games" onClick={() => setAutoUpdate(!autoUpdateGames)} /></div><div className="setting-row"><div><strong>Download limit</strong><small>No limit configured.</small></div><button className="select-button" type="button">Unlimited</button></div></article></section>;
+  const runDiagnostics = async () => {
+    setDiagnostics({ api: "checking", downloads: "checking", storage: "checking" });
+    const root = await installRoot();
+    const [api, downloads, storage] = await Promise.all([
+      invoke<boolean>("diagnostics_check_endpoint", { target: "api" }).catch(() => false),
+      invoke<boolean>("diagnostics_check_endpoint", { target: "downloads" }).catch(() => false),
+      invoke<boolean>("diagnostics_check_install_root", { installRoot: root }).catch(() => false),
+    ]);
+    setDiagnostics({ api: api ? "pass" : "fail", downloads: downloads ? "pass" : "fail", storage: storage ? "pass" : "fail" });
+  };
+  const diagnosticLabel = (result: DiagnosticResult) => result === "checking" ? "Checking" : result === "pass" ? "Available" : result === "fail" ? "Unavailable" : "Not checked";
+  return <section className="settings"><article className="panel"><p className="panel-label">LAUNCHER</p><h3>Application settings</h3><div className="setting-row"><div><strong>Launch at startup</strong><small>Start Nordiee when you sign in to Windows.</small></div><button className="toggle" type="button" aria-label="Launch at startup, disabled" /></div><div className="setting-row"><div><strong>Game install location</strong><small>Games install beside Nordiee in the NordieeApps folder by default.</small></div><label className="path-field"><span className="sr-only">Game install location</span><input value={installRootValue} onChange={(event) => saveInstallRoot(event.target.value)} spellCheck="false" /></label></div><div className="setting-row"><div><strong>Automatically update games</strong><small>Check installed games when Nordiee opens and download changed files.</small></div><button className={autoUpdateGames ? "toggle enabled" : "toggle"} type="button" aria-pressed={autoUpdateGames} aria-label="Automatically update games" onClick={() => setAutoUpdate(!autoUpdateGames)} /></div><div className="setting-row"><div><strong>Download limit</strong><small>No limit configured.</small></div><button className="select-button" type="button">Unlimited</button></div></article><article className="panel diagnostics"><div className="panel-heading"><div><p className="panel-label">DIAGNOSTICS</p><h3>System checks</h3></div><button className="select-button" type="button" onClick={() => void runDiagnostics()}>Run checks</button></div><p>Test Nordiee API, downloads and write permission before troubleshooting a game.</p><div className="diagnostic-list">{(["api", "downloads", "storage"] as const).map((key) => <div className="diagnostic-row" key={key}><span>{key === "api" ? "Nordiee API" : key === "downloads" ? "Download service" : "NordieeApps write access"}</span><strong className={`diagnostic-${diagnostics[key]}`}>{diagnosticLabel(diagnostics[key])}</strong></div>)}</div></article></section>;
 }

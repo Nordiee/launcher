@@ -316,12 +316,32 @@ fn safe_game_id(game_id: &str) -> bool {
     !game_id.is_empty() && game_id.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
 }
 
+#[tauri::command]
+async fn diagnostics_check_endpoint(target: String) -> Result<bool, String> {
+    let url = match target.as_str() {
+        "api" => "https://api.nordiee.com/api/v1/library",
+        "downloads" => "https://downloads.nordiee.com/",
+        _ => return Err("Unknown diagnostic target.".to_string()),
+    };
+    Ok(reqwest::Client::new().head(url).send().await.is_ok())
+}
+
+#[tauri::command]
+async fn diagnostics_check_install_root(install_root: String) -> Result<bool, String> {
+    let directory = PathBuf::from(install_root);
+    tokio::fs::create_dir_all(&directory).await.map_err(|error| error.to_string())?;
+    let probe = directory.join(".nordiee-write-probe");
+    tokio::fs::write(&probe, b"nordiee").await.map_err(|error| error.to_string())?;
+    tokio::fs::remove_file(probe).await.map_err(|error| error.to_string())?;
+    Ok(true)
+}
+
 pub fn run() {
     tauri::Builder::default()
         .manage(RunningGames(Arc::new(Mutex::new(HashSet::new()))))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .invoke_handler(tauri::generate_handler![launcher_version, default_install_root, save_account_secret, load_account_secret, remove_account_secret, install_game, repair_game, update_game, verify_game, installed_game_version, uninstall_game, launch_game])
+        .invoke_handler(tauri::generate_handler![launcher_version, default_install_root, save_account_secret, load_account_secret, remove_account_secret, install_game, repair_game, update_game, verify_game, installed_game_version, uninstall_game, launch_game, diagnostics_check_endpoint, diagnostics_check_install_root])
         .run(tauri::generate_context!())
         .expect("error while running Nordiee Launcher");
 }
