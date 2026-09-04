@@ -224,6 +224,20 @@ function Library({ accessToken }: { accessToken: string }) {
       setInstallError(error instanceof Error ? error.message : "We could not verify this game.");
     }
   };
+  const repair = async (game: LibraryGame) => {
+    setInstallError("");
+    setInstallingId(game.id);
+    setDownloadProgress(null);
+    try {
+      await invoke("repair_game", { gameId: game.id, installRoot: await installRoot() });
+      setVerification((current) => ({ ...current, [game.id]: "verified" }));
+    } catch (error) {
+      setInstallError(error instanceof Error ? error.message : "We could not repair this game.");
+    } finally {
+      setInstallingId(null);
+      setDownloadProgress(null);
+    }
+  };
   if (status === "loading") return <section className="library-state" aria-live="polite"><span className="library-loader" aria-hidden="true" /><h2>Loading your library</h2><p>Fetching the games connected to this account.</p></section>;
   if (status === "error") return <section className="library-state"><div className="empty-mark" aria-hidden="true">N</div><h2>We could not load your library</h2><p>Check your connection, then try again.</p><button className="primary-button" type="button" onClick={() => void loadLibrary()}>Try again</button></section>;
   const offlineNotice = status === "offline" ? <p className="offline-notice" role="status">Offline mode - showing the last library saved on this device.</p> : null;
@@ -233,7 +247,7 @@ function Library({ accessToken }: { accessToken: string }) {
     const isInstalled = installedIds.includes(game.id) || game.installState === "INSTALLED";
     const percentage = isInstalling && downloadProgress?.gameId === game.id && downloadProgress.totalBytes ? Math.round((downloadProgress.downloadedBytes / downloadProgress.totalBytes) * 100) : null;
     const checkState = verification[game.id];
-    return <article className="library-card" key={game.id}><div className="library-cover" aria-hidden="true">N</div><div><p className="panel-label">{isInstalled ? checkState === "repair" ? "REPAIR REQUIRED" : "INSTALLED" : isInstalling ? "DOWNLOADING" : game.installState}</p><h2>{game.title}</h2><p>{isInstalling && percentage !== null ? `${percentage}% downloaded` : checkState === "verified" ? "All installed files verified." : checkState === "repair" ? "One or more files need repair." : game.installSizeBytes ? `${Math.round(game.installSizeBytes / 1_000_000_000)} GB` : "Size will be available soon"}</p><button className="library-action" type="button" disabled={isInstalling || checkState === "verifying"} onClick={() => void (isInstalled ? verify(game) : install(game))}>{isInstalled ? checkState === "verifying" ? "Verifying" : checkState === "repair" ? "Repair coming next" : "Verify files" : isInstalling ? percentage !== null ? `Downloading ${percentage}%` : "Preparing" : "Install"}</button></div></article>;
+    return <article className="library-card" key={game.id}><div className="library-cover" aria-hidden="true">N</div><div><p className="panel-label">{isInstalled ? checkState === "repair" ? "REPAIR REQUIRED" : "INSTALLED" : isInstalling ? "DOWNLOADING" : game.installState}</p><h2>{game.title}</h2><p>{isInstalling && percentage !== null ? `${percentage}% downloaded` : checkState === "verified" ? "All installed files verified." : checkState === "repair" ? "One or more files need repair." : game.installSizeBytes ? `${Math.round(game.installSizeBytes / 1_000_000_000)} GB` : "Size will be available soon"}</p><button className="library-action" type="button" disabled={isInstalling || checkState === "verifying"} onClick={() => void (isInstalled ? checkState === "repair" ? repair(game) : verify(game) : install(game))}>{isInstalled ? checkState === "verifying" ? "Verifying" : checkState === "repair" ? isInstalling ? percentage !== null ? `Repairing ${percentage}%` : "Preparing repair" : "Repair files" : "Verify files" : isInstalling ? percentage !== null ? `Downloading ${percentage}%` : "Preparing" : "Install"}</button></div></article>;
   })}</section></>;
 }
 function EmptyState({ title, text, action }: { title: string; text: string; action: string }) { return <section className="empty-state"><div className="empty-mark" aria-hidden="true">N</div><h2>{title}</h2><p>{text}</p><button className="primary-button" type="button">{action}</button></section>; }
