@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::{atomic::{AtomicBool, Ordering}, Arc, Mutex};
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 #[tauri::command]
@@ -517,13 +517,33 @@ async fn diagnostics_check_install_root(install_root: String) -> Result<bool, St
     Ok(true)
 }
 
+#[tauri::command]
+async fn export_diagnostic_report(app: AppHandle, api: String, downloads: String, storage: String) -> Result<String, String> {
+    let directory = app.path().download_dir().or_else(|_| app.path().app_data_dir()).map_err(|error| error.to_string())?;
+    tokio::fs::create_dir_all(&directory).await.map_err(|error| error.to_string())?;
+    let timestamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(|error| error.to_string())?.as_secs();
+    let report_path = directory.join(format!("nordiee-diagnostics-{}.txt", timestamp));
+    let report = format!(
+        "Nordiee Launcher Diagnostic Report\nGenerated: {}\n\nLauncher version: {}\nOperating system: {}\nArchitecture: {}\n\nNordiee API: {}\nDownload service: {}\nNordieeApps write access: {}\n\nThis report contains no account credentials, tokens, email addresses, or game files.\n",
+        timestamp,
+        nordiee_core::LAUNCHER_CORE_VERSION,
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+        api,
+        downloads,
+        storage,
+    );
+    tokio::fs::write(&report_path, report).await.map_err(|error| error.to_string())?;
+    Ok(report_path.to_string_lossy().into_owned())
+}
+
 pub fn run() {
     tauri::Builder::default()
         .manage(RunningGames(Arc::new(Mutex::new(HashSet::new()))))
         .manage(DownloadControls::new())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .invoke_handler(tauri::generate_handler![launcher_version, default_install_root, install_location_free_space, launch_at_startup_enabled, set_launch_at_startup, save_account_secret, load_account_secret, remove_account_secret, install_game, repair_game, update_game, pause_downloads, resume_downloads, cancel_downloads, verify_game, installed_game_version, installed_game_size, uninstall_game, open_game_folder, launch_game, diagnostics_check_endpoint, diagnostics_check_install_root])
+        .invoke_handler(tauri::generate_handler![launcher_version, default_install_root, install_location_free_space, launch_at_startup_enabled, set_launch_at_startup, save_account_secret, load_account_secret, remove_account_secret, install_game, repair_game, update_game, pause_downloads, resume_downloads, cancel_downloads, verify_game, installed_game_version, installed_game_size, uninstall_game, open_game_folder, launch_game, diagnostics_check_endpoint, diagnostics_check_install_root, export_diagnostic_report])
         .run(tauri::generate_context!())
         .expect("error while running Nordiee Launcher");
 }
