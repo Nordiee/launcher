@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useState, type ReactNode } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ArrowRightIcon, ChevronDownIcon, CloseIcon, DownloadIcon, HomeIcon, LibraryIcon, MaximizeIcon, MinimizeIcon, PlusIcon, SettingsIcon, TrashIcon } from "./Icons";
 import { activeAccountEmail, clearActiveAccount, getAccountSession, listSavedAccounts, migrateLegacyAccounts, removeSavedAccount, saveAccountSession, type AccountSecret, type SavedAccount } from "./accountStore";
+import { readLibraryCache, saveLibraryCache, type LibraryGame } from "./libraryCache";
 import { applyAvailableUpdate, type UpdateState } from "./updates";
 
 type View = "Home" | "Library" | "Downloads" | "Settings";
@@ -9,7 +10,6 @@ type AuthMode = "sign-in" | "sign-up";
 type Session = SavedAccount & AccountSecret;
 type AuthResponse = { accessToken: string; refreshToken: string; username: string; email: string };
 type AccessView = "accounts" | "credentials";
-type LibraryGame = { id: string; title: string; installState: string; installSizeBytes: number };
 
 const API_BASE_URL = "https://api.nordiee.com/api/v1/auth";
 const LIBRARY_API_URL = "https://api.nordiee.com/api/v1/library";
@@ -144,22 +144,32 @@ function Launcher({ session, onSwitchAccount, onLogOff, onRemoveAccount }: { ses
 
 function Home() { return <section className="home-grid" aria-label="Launcher overview"><article className="welcome-card"><p className="eyebrow">EARLY BUILD</p><h2>Your games, one place.</h2><p>Nordiee is getting ready. Your verified account will connect your library, downloads and settings.</p><button className="primary-button" type="button">View your library</button></article><article className="panel"><p className="panel-label">DOWNLOADS</p><h3>Nothing in queue</h3><p>Game installs, updates and repairs will appear here.</p></article><article className="panel full-width"><div className="panel-heading"><div><p className="panel-label">LIBRARY</p><h3>Ready when you are</h3></div><span className="count">0 games</span></div><p>Your library will appear here after your account has games.</p></article></section>; }
 function Library({ accessToken }: { accessToken: string }) {
-  const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
+  const email = activeAccountEmail() ?? "";
+  const cachedLibrary = readLibraryCache(email);
+  const [status, setStatus] = useState<"loading" | "ready" | "offline" | "error">("loading");
   const [games, setGames] = useState<LibraryGame[]>([]);
   const loadLibrary = async () => {
     setStatus("loading");
     try {
       const response = await fetch(LIBRARY_API_URL, { headers: { Authorization: `Bearer ${accessToken}` } });
       if (!response.ok) throw new Error("Library request failed");
-      setGames(await response.json() as LibraryGame[]);
+      const nextGames = await response.json() as LibraryGame[];
+      saveLibraryCache(email, nextGames);
+      setGames(nextGames);
       setStatus("ready");
-    } catch { setStatus("error"); }
+    } catch {
+      if (cachedLibrary) {
+        setGames(cachedLibrary.games);
+        setStatus("offline");
+      } else setStatus("error");
+    }
   };
-  useEffect(() => { void loadLibrary(); }, [accessToken]);
+  useEffect(() => { void loadLibrary(); }, [accessToken, email]);
   if (status === "loading") return <section className="library-state" aria-live="polite"><span className="library-loader" aria-hidden="true" /><h2>Loading your library</h2><p>Fetching the games connected to this account.</p></section>;
   if (status === "error") return <section className="library-state"><div className="empty-mark" aria-hidden="true">N</div><h2>We could not load your library</h2><p>Check your connection, then try again.</p><button className="primary-button" type="button" onClick={() => void loadLibrary()}>Try again</button></section>;
-  if (!games.length) return <section className="empty-state"><div className="empty-mark" aria-hidden="true">N</div><h2>Your library is ready</h2><p>Games connected to your Nordiee account will appear here.</p></section>;
-  return <section className="library-grid" aria-label="Your game library">{games.map((game) => <article className="library-card" key={game.id}><div className="library-cover" aria-hidden="true">N</div><div><p className="panel-label">{game.installState}</p><h2>{game.title}</h2><p>{game.installSizeBytes ? `${Math.round(game.installSizeBytes / 1_000_000_000)} GB` : "Size will be available soon"}</p></div></article>)}</section>;
+  const offlineNotice = status === "offline" ? <p className="offline-notice" role="status">Offline mode - showing the last library saved on this device.</p> : null;
+  if (!games.length) return <>{offlineNotice}<section className="empty-state"><div className="empty-mark" aria-hidden="true">N</div><h2>Your library is ready</h2><p>Games connected to your Nordiee account will appear here.</p></section></>;
+  return <>{offlineNotice}<section className="library-grid" aria-label="Your game library">{games.map((game) => <article className="library-card" key={game.id}><div className="library-cover" aria-hidden="true">N</div><div><p className="panel-label">{game.installState}</p><h2>{game.title}</h2><p>{game.installSizeBytes ? `${Math.round(game.installSizeBytes / 1_000_000_000)} GB` : "Size will be available soon"}</p></div></article>)}</section></>;
 }
 function EmptyState({ title, text, action }: { title: string; text: string; action: string }) { return <section className="empty-state"><div className="empty-mark" aria-hidden="true">N</div><h2>{title}</h2><p>{text}</p><button className="primary-button" type="button">{action}</button></section>; }
 function Settings() { return <section className="settings"><article className="panel"><p className="panel-label">LAUNCHER</p><h3>Application settings</h3><div className="setting-row"><div><strong>Launch at startup</strong><small>Start Nordiee when you sign in to Windows.</small></div><button className="toggle" type="button" aria-label="Launch at startup, disabled" /></div><div className="setting-row"><div><strong>Download limit</strong><small>No limit configured.</small></div><button className="select-button" type="button">Unlimited</button></div></article></section>; }
