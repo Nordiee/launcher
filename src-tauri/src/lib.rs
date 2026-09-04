@@ -2,7 +2,7 @@ use keyring::Entry;
 use futures_util::StreamExt;
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::{atomic::{AtomicBool, Ordering}, Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -470,6 +470,10 @@ async fn checksum_partial_file(path: &Path) -> Result<(Sha256, u64), String> {
 }
 
 fn safe_install_path(game_directory: &Path, relative_path: &str) -> Result<PathBuf, String> {
+    let relative = Path::new(relative_path);
+    if relative_path.is_empty() || relative.components().any(|component| matches!(component, Component::ParentDir | Component::RootDir | Component::Prefix(_))) {
+        return Err("The game file path is invalid.".to_string());
+    }
     let destination = game_directory.join(relative_path);
     if !destination.starts_with(game_directory) {
         return Err("The game file path is invalid.".to_string());
@@ -483,7 +487,8 @@ fn safe_game_id(game_id: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::safe_game_id;
+    use super::{safe_game_id, safe_install_path};
+    use std::path::Path;
 
     #[test]
     fn accepts_safe_game_identifiers() {
@@ -497,6 +502,14 @@ mod tests {
         for game_id in ["", "../outside", "folder/game", "folder\\game", "game id", "game.json"] {
             assert!(!safe_game_id(game_id), "expected {game_id} to be rejected");
         }
+    }
+
+    #[test]
+    fn install_paths_cannot_escape_the_game_directory() {
+        let game_directory = Path::new("C:\\NordieeApps\\ashen-crown");
+        assert!(safe_install_path(game_directory, "Game/bin/game.exe").is_ok());
+        assert!(safe_install_path(game_directory, "../outside.exe").is_err());
+        assert!(safe_install_path(game_directory, "..\\outside.exe").is_err());
     }
 }
 
