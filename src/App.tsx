@@ -16,6 +16,11 @@ type AccessView = "accounts" | "credentials";
 const API_BASE_URL = "https://api.nordiee.com/api/v1/auth";
 const LIBRARY_API_URL = "https://api.nordiee.com/api/v1/library";
 
+async function installRoot() {
+  const saved = localStorage.getItem("nordiee.installRoot");
+  return saved?.trim() || invoke<string>("default_install_root");
+}
+
 const navigation: { label: View; icon: ReactNode }[] = [
   { label: "Home", icon: <HomeIcon /> },
   { label: "Library", icon: <LibraryIcon /> },
@@ -183,7 +188,7 @@ function Library({ accessToken }: { accessToken: string }) {
       const response = await fetch(`${LIBRARY_API_URL}/${game.id}/manifest`, { headers: { Authorization: `Bearer ${accessToken}` } });
       if (!response.ok) throw new Error("This game does not have an active install build yet.");
       const manifest = await response.json();
-      await invoke("install_game", { manifestJson: JSON.stringify(manifest), installRoot: localStorage.getItem("nordiee.installRoot") ?? "C:\\Nordiee Games" });
+      await invoke("install_game", { manifestJson: JSON.stringify(manifest), installRoot: await installRoot() });
       setInstalledIds((current) => [...new Set([...current, game.id])]);
     } catch (error) {
       setInstallError(error instanceof Error ? error.message : "We could not install this game.");
@@ -205,7 +210,8 @@ function Library({ accessToken }: { accessToken: string }) {
 }
 function EmptyState({ title, text, action }: { title: string; text: string; action: string }) { return <section className="empty-state"><div className="empty-mark" aria-hidden="true">N</div><h2>{title}</h2><p>{text}</p><button className="primary-button" type="button">{action}</button></section>; }
 function Settings() {
-  const [installRoot, setInstallRoot] = useState(() => localStorage.getItem("nordiee.installRoot") ?? "C:\\Nordiee Games");
-  const saveInstallRoot = (value: string) => { setInstallRoot(value); localStorage.setItem("nordiee.installRoot", value.trim() || "C:\\Nordiee Games"); };
-  return <section className="settings"><article className="panel"><p className="panel-label">LAUNCHER</p><h3>Application settings</h3><div className="setting-row"><div><strong>Launch at startup</strong><small>Start Nordiee when you sign in to Windows.</small></div><button className="toggle" type="button" aria-label="Launch at startup, disabled" /></div><div className="setting-row"><div><strong>Game install location</strong><small>Each game installs into its own folder here.</small></div><label className="path-field"><span className="sr-only">Game install location</span><input value={installRoot} onChange={(event) => saveInstallRoot(event.target.value)} spellCheck="false" /></label></div><div className="setting-row"><div><strong>Download limit</strong><small>No limit configured.</small></div><button className="select-button" type="button">Unlimited</button></div></article></section>;
+  const [installRootValue, setInstallRootValue] = useState(() => localStorage.getItem("nordiee.installRoot") ?? "");
+  useEffect(() => { if (!installRootValue) void installRoot().then(setInstallRootValue); }, [installRootValue]);
+  const saveInstallRoot = (value: string) => { setInstallRootValue(value); if (value.trim()) localStorage.setItem("nordiee.installRoot", value.trim()); else localStorage.removeItem("nordiee.installRoot"); };
+  return <section className="settings"><article className="panel"><p className="panel-label">LAUNCHER</p><h3>Application settings</h3><div className="setting-row"><div><strong>Launch at startup</strong><small>Start Nordiee when you sign in to Windows.</small></div><button className="toggle" type="button" aria-label="Launch at startup, disabled" /></div><div className="setting-row"><div><strong>Game install location</strong><small>Games install beside Nordiee in the NordieeApps folder by default.</small></div><label className="path-field"><span className="sr-only">Game install location</span><input value={installRootValue} onChange={(event) => saveInstallRoot(event.target.value)} spellCheck="false" /></label></div><div className="setting-row"><div><strong>Download limit</strong><small>No limit configured.</small></div><button className="select-button" type="button">Unlimited</button></div></article></section>;
 }

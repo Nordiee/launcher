@@ -10,6 +10,13 @@ fn launcher_version() -> &'static str {
     nordiee_core::LAUNCHER_CORE_VERSION
 }
 
+#[tauri::command]
+fn default_install_root() -> Result<String, String> {
+    let executable = std::env::current_exe().map_err(|error| error.to_string())?;
+    let launcher_directory = executable.parent().ok_or("Nordiee installation directory is unavailable.")?;
+    Ok(launcher_directory.join("NordieeApps").to_string_lossy().into_owned())
+}
+
 const ACCOUNT_SECRET_SERVICE: &str = "com.nordiee.launcher.account";
 
 fn account_entry(email: &str) -> Result<Entry, String> {
@@ -100,7 +107,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .invoke_handler(tauri::generate_handler![launcher_version, save_account_secret, load_account_secret, remove_account_secret, install_game])
+        .invoke_handler(tauri::generate_handler![launcher_version, default_install_root, save_account_secret, load_account_secret, remove_account_secret, install_game])
         .run(tauri::generate_context!())
         .expect("error while running Nordiee Launcher");
 }
