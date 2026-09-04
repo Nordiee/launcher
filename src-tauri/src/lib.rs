@@ -510,6 +510,8 @@ mod tests {
         assert!(safe_install_path(game_directory, "Game/bin/game.exe").is_ok());
         assert!(safe_install_path(game_directory, "../outside.exe").is_err());
         assert!(safe_install_path(game_directory, "..\\outside.exe").is_err());
+        assert!(safe_install_path(game_directory, "C:\\outside.exe").is_err());
+        assert!(safe_install_path(game_directory, "\\\\server\\share\\outside.exe").is_err());
     }
 }
 
