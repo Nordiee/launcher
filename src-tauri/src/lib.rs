@@ -481,6 +481,25 @@ fn safe_game_id(game_id: &str) -> bool {
     !game_id.is_empty() && game_id.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
 }
 
+#[cfg(test)]
+mod tests {
+    use super::safe_game_id;
+
+    #[test]
+    fn accepts_safe_game_identifiers() {
+        for game_id in ["ashen-crown", "Nordiee_Test_01", "game123"] {
+            assert!(safe_game_id(game_id), "expected {game_id} to be accepted");
+        }
+    }
+
+    #[test]
+    fn rejects_path_traversal_and_invalid_game_identifiers() {
+        for game_id in ["", "../outside", "folder/game", "folder\\game", "game id", "game.json"] {
+            assert!(!safe_game_id(game_id), "expected {game_id} to be rejected");
+        }
+    }
+}
+
 fn directory_size(path: &Path) -> Result<u64, String> {
     let mut total = 0_u64;
     for entry in std::fs::read_dir(path).map_err(|error| error.to_string())? {
