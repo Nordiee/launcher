@@ -202,6 +202,7 @@ function Library({ accessToken, onDownload, runningGameIds }: { accessToken: str
   const [games, setGames] = useState<LibraryGame[]>([]);
   const [installingId, setInstallingId] = useState<string | null>(null);
   const [installedIds, setInstalledIds] = useState<string[]>([]);
+  const [installedSizes, setInstalledSizes] = useState<Record<string, number>>({});
   const [installError, setInstallError] = useState("");
   const [verification, setVerification] = useState<Record<string, VerificationState>>({});
   const [updateStatus, setUpdateStatus] = useState<Record<string, string>>({});
@@ -233,9 +234,14 @@ function Library({ accessToken, onDownload, runningGameIds }: { accessToken: str
     const findInstalledGames = async () => {
       try {
         const root = await installRoot();
-        const checks = await Promise.all(games.map(async (game) => ({ id: game.id, version: await invoke<string | null>("installed_game_version", { gameId: game.id, installRoot: root }) })));
+        const checks = await Promise.all(games.map(async (game) => {
+          const version = await invoke<string | null>("installed_game_version", { gameId: game.id, installRoot: root });
+          const size = version ? await invoke<number | null>("installed_game_size", { gameId: game.id, installRoot: root }) : null;
+          return { id: game.id, version, size };
+        }));
         const installedGameIds = checks.filter((check) => check.version).map((check) => check.id);
         if (active) setInstalledIds(installedGameIds);
+        if (active) setInstalledSizes(Object.fromEntries(checks.flatMap((check) => check.size === null ? [] : [[check.id, check.size]])));
         if (localStorage.getItem("nordiee.autoUpdateGames") !== "false") {
           for (const game of games.filter((game) => installedGameIds.includes(game.id))) {
             try {
@@ -376,7 +382,9 @@ function Library({ accessToken, onDownload, runningGameIds }: { accessToken: str
     const percentage = isInstalling && downloadProgress?.gameId === game.id && downloadProgress.totalBytes ? Math.round((downloadProgress.downloadedBytes / downloadProgress.totalBytes) * 100) : null;
     const checkState = verification[game.id];
     const statusLabel = isRunning ? "RUNNING" : isInstalled ? checkState === "repair" ? "REPAIR REQUIRED" : "INSTALLED" : isInstalling ? "DOWNLOADING" : game.installState;
-    const detail = isInstalling && percentage !== null ? `${percentage}% downloaded` : updateStatus[game.id] ?? (checkState === "verified" ? "All installed files verified." : checkState === "repair" ? "One or more files need repair." : game.installSizeBytes ? `${Math.round(game.installSizeBytes / 1_000_000_000)} GB` : "Size will be available soon");
+    const installedSize = installedSizes[game.id];
+    const displaySize = installedSize ?? game.installSizeBytes;
+    const detail = isInstalling && percentage !== null ? `${percentage}% downloaded` : updateStatus[game.id] ?? (checkState === "verified" ? "All installed files verified." : checkState === "repair" ? "One or more files need repair." : displaySize ? `${isInstalled ? "Installed" : "Download"} · ${(displaySize / 1_000_000_000).toFixed(1)} GB` : "Size will be available soon");
     const primaryLabel = !isInstalled ? isInstalling ? percentage !== null ? `Downloading ${percentage}%` : "Preparing" : "Install" : checkState === "verifying" ? "Verifying" : checkState === "repair" ? isInstalling ? percentage !== null ? `Repairing ${percentage}%` : "Preparing repair" : "Repair files" : "Verify files";
     const primaryAction = () => { if (!isInstalled) return install(game); if (checkState === "repair") return repair(game); return verify(game); };
     return <article className="library-card" key={game.id}><div className="library-cover" aria-hidden="true">N</div><div><p className="panel-label">{statusLabel}</p><h2>{game.title}</h2><p>{detail}</p><div className="library-actions">{isInstalled && <button className="library-action play-action" type="button" disabled={transferInProgress || isRunning || checkState === "repair"} onClick={() => void play(game)}>{isRunning ? "Running" : isInstalling ? percentage !== null ? `Updating ${percentage}%` : "Checking update" : "Play"}</button>}{isInstalled && <button className="library-action" type="button" disabled={transferInProgress || isRunning || checkState === "repair"} onClick={() => void update(game)}>Check update</button>}<button className="library-action" type="button" disabled={transferInProgress || isRunning || checkState === "verifying"} onClick={() => void primaryAction()}>{primaryLabel}</button>{isInstalled && <button className="library-action" type="button" disabled={transferInProgress} onClick={() => void openFolder(game)}>Open folder</button>}{isInstalled && <button className="library-action uninstall-action" type="button" disabled={transferInProgress || isRunning} onClick={() => void uninstall(game)}>Uninstall</button>}</div></div></article>;

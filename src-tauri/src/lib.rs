@@ -345,6 +345,18 @@ async fn installed_game_version(game_id: String, install_root: String) -> Result
 }
 
 #[tauri::command]
+async fn installed_game_size(game_id: String, install_root: String) -> Result<Option<u64>, String> {
+    if !safe_game_id(&game_id) {
+        return Err("The game identifier is invalid.".to_string());
+    }
+    let game_directory = PathBuf::from(install_root).join(game_id);
+    if !tokio::fs::try_exists(&game_directory).await.map_err(|error| error.to_string())? {
+        return Ok(None);
+    }
+    tokio::task::spawn_blocking(move || directory_size(&game_directory)).await.map_err(|error| error.to_string())?.map(Some)
+}
+
+#[tauri::command]
 async fn uninstall_game(game_id: String, install_root: String) -> Result<(), String> {
     if !safe_game_id(&game_id) {
         return Err("The game identifier is invalid.".to_string());
@@ -454,6 +466,20 @@ fn safe_game_id(game_id: &str) -> bool {
     !game_id.is_empty() && game_id.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
 }
 
+fn directory_size(path: &Path) -> Result<u64, String> {
+    let mut total = 0_u64;
+    for entry in std::fs::read_dir(path).map_err(|error| error.to_string())? {
+        let entry = entry.map_err(|error| error.to_string())?;
+        let metadata = entry.metadata().map_err(|error| error.to_string())?;
+        if metadata.is_dir() {
+            total = total.saturating_add(directory_size(&entry.path())?);
+        } else if metadata.is_file() {
+            total = total.saturating_add(metadata.len());
+        }
+    }
+    Ok(total)
+}
+
 #[tauri::command]
 async fn diagnostics_check_endpoint(target: String) -> Result<bool, String> {
     let url = match target.as_str() {
@@ -480,7 +506,7 @@ pub fn run() {
         .manage(DownloadControls::new())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .invoke_handler(tauri::generate_handler![launcher_version, default_install_root, launch_at_startup_enabled, set_launch_at_startup, save_account_secret, load_account_secret, remove_account_secret, install_game, repair_game, update_game, pause_downloads, resume_downloads, cancel_downloads, verify_game, installed_game_version, uninstall_game, open_game_folder, launch_game, diagnostics_check_endpoint, diagnostics_check_install_root])
+        .invoke_handler(tauri::generate_handler![launcher_version, default_install_root, launch_at_startup_enabled, set_launch_at_startup, save_account_secret, load_account_secret, remove_account_secret, install_game, repair_game, update_game, pause_downloads, resume_downloads, cancel_downloads, verify_game, installed_game_version, installed_game_size, uninstall_game, open_game_folder, launch_game, diagnostics_check_endpoint, diagnostics_check_install_root])
         .run(tauri::generate_context!())
         .expect("error while running Nordiee Launcher");
 }
