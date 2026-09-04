@@ -43,7 +43,7 @@ function AuthScreen({ onSession }: { onSession: (session: Session) => void }) {
     const data = new FormData(event.currentTarget);
     const payload = { email: String(data.get("email")), password: String(data.get("password")), username: mode === "sign-up" ? String(data.get("display-name")) : undefined };
     try {
-      const response = await fetch(`https://backend-production-22c63.up.railway.app/api/v1/auth/${mode === "sign-in" ? "login" : "signup"}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+      const response = await fetch(`https://api.nordiee.com/api/v1/auth/${mode === "sign-in" ? "login" : "signup"}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
       const body = await response.json();
       if (!response.ok) throw new Error(body.error ?? "Unable to authenticate");
       onSession({ displayName: body.username, email: body.email });
