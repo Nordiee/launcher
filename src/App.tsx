@@ -316,6 +316,14 @@ function Library({ accessToken, onDownload, runningGameIds }: { accessToken: str
       setInstallingId(null);
     }
   };
+  const openFolder = async (game: LibraryGame) => {
+    setInstallError("");
+    try {
+      await invoke("open_game_folder", { gameId: game.id, installRoot: await installRoot() });
+    } catch (error) {
+      setInstallError(error instanceof Error ? error.message : "We could not open this game folder.");
+    }
+  };
   const play = async (game: LibraryGame) => {
     setInstallError("");
     setInstallingId(game.id);
@@ -371,7 +379,7 @@ function Library({ accessToken, onDownload, runningGameIds }: { accessToken: str
     const detail = isInstalling && percentage !== null ? `${percentage}% downloaded` : updateStatus[game.id] ?? (checkState === "verified" ? "All installed files verified." : checkState === "repair" ? "One or more files need repair." : game.installSizeBytes ? `${Math.round(game.installSizeBytes / 1_000_000_000)} GB` : "Size will be available soon");
     const primaryLabel = !isInstalled ? isInstalling ? percentage !== null ? `Downloading ${percentage}%` : "Preparing" : "Install" : checkState === "verifying" ? "Verifying" : checkState === "repair" ? isInstalling ? percentage !== null ? `Repairing ${percentage}%` : "Preparing repair" : "Repair files" : "Verify files";
     const primaryAction = () => { if (!isInstalled) return install(game); if (checkState === "repair") return repair(game); return verify(game); };
-    return <article className="library-card" key={game.id}><div className="library-cover" aria-hidden="true">N</div><div><p className="panel-label">{statusLabel}</p><h2>{game.title}</h2><p>{detail}</p><div className="library-actions">{isInstalled && <button className="library-action play-action" type="button" disabled={transferInProgress || isRunning || checkState === "repair"} onClick={() => void play(game)}>{isRunning ? "Running" : isInstalling ? percentage !== null ? `Updating ${percentage}%` : "Checking update" : "Play"}</button>}{isInstalled && <button className="library-action" type="button" disabled={transferInProgress || isRunning || checkState === "repair"} onClick={() => void update(game)}>Check update</button>}<button className="library-action" type="button" disabled={transferInProgress || isRunning || checkState === "verifying"} onClick={() => void primaryAction()}>{primaryLabel}</button>{isInstalled && <button className="library-action uninstall-action" type="button" disabled={transferInProgress || isRunning} onClick={() => void uninstall(game)}>Uninstall</button>}</div></div></article>;
+    return <article className="library-card" key={game.id}><div className="library-cover" aria-hidden="true">N</div><div><p className="panel-label">{statusLabel}</p><h2>{game.title}</h2><p>{detail}</p><div className="library-actions">{isInstalled && <button className="library-action play-action" type="button" disabled={transferInProgress || isRunning || checkState === "repair"} onClick={() => void play(game)}>{isRunning ? "Running" : isInstalling ? percentage !== null ? `Updating ${percentage}%` : "Checking update" : "Play"}</button>}{isInstalled && <button className="library-action" type="button" disabled={transferInProgress || isRunning || checkState === "repair"} onClick={() => void update(game)}>Check update</button>}<button className="library-action" type="button" disabled={transferInProgress || isRunning || checkState === "verifying"} onClick={() => void primaryAction()}>{primaryLabel}</button>{isInstalled && <button className="library-action" type="button" disabled={transferInProgress} onClick={() => void openFolder(game)}>Open folder</button>}{isInstalled && <button className="library-action uninstall-action" type="button" disabled={transferInProgress || isRunning} onClick={() => void uninstall(game)}>Uninstall</button>}</div></div></article>;
   })}</section></>;
 }
 function Downloads({ download, paused, onTogglePaused }: { download: DownloadActivity | null; paused: boolean; onTogglePaused: () => void }) {

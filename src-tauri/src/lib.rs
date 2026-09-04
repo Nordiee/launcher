@@ -361,6 +361,19 @@ async fn uninstall_game(game_id: String, install_root: String) -> Result<(), Str
 }
 
 #[tauri::command]
+async fn open_game_folder(game_id: String, install_root: String) -> Result<(), String> {
+    if !safe_game_id(&game_id) {
+        return Err("The game identifier is invalid.".to_string());
+    }
+    let game_directory = PathBuf::from(&install_root).join(&game_id);
+    if !game_directory.starts_with(Path::new(&install_root)) || !tokio::fs::try_exists(&game_directory).await.map_err(|error| error.to_string())? {
+        return Err("This game is not installed by Nordiee.".to_string());
+    }
+    std::process::Command::new("explorer.exe").arg(game_directory).spawn().map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
 async fn launch_game(app: AppHandle, running_games: State<'_, RunningGames>, game_id: String, install_root: String) -> Result<(), String> {
     if !safe_game_id(&game_id) {
         return Err("The game identifier is invalid.".to_string());
@@ -467,7 +480,7 @@ pub fn run() {
         .manage(DownloadControls::new())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .invoke_handler(tauri::generate_handler![launcher_version, default_install_root, launch_at_startup_enabled, set_launch_at_startup, save_account_secret, load_account_secret, remove_account_secret, install_game, repair_game, update_game, pause_downloads, resume_downloads, cancel_downloads, verify_game, installed_game_version, uninstall_game, launch_game, diagnostics_check_endpoint, diagnostics_check_install_root])
+        .invoke_handler(tauri::generate_handler![launcher_version, default_install_root, launch_at_startup_enabled, set_launch_at_startup, save_account_secret, load_account_secret, remove_account_secret, install_game, repair_game, update_game, pause_downloads, resume_downloads, cancel_downloads, verify_game, installed_game_version, uninstall_game, open_game_folder, launch_game, diagnostics_check_endpoint, diagnostics_check_install_root])
         .run(tauri::generate_context!())
         .expect("error while running Nordiee Launcher");
 }
