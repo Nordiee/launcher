@@ -19,6 +19,7 @@ type DownloadActivity = { gameId: string; title: string; phase: string; download
 type DiagnosticResult = "idle" | "checking" | "pass" | "fail";
 type NotificationKind = LauncherNotification["kind"];
 type ServiceStatus = "checking" | "operational" | "unavailable";
+type LibraryFilter = "all" | "installed" | "not-installed";
 const API_BASE_URL = "https://api.nordiee.com/api/v1/auth";
 const LIBRARY_API_URL = "https://api.nordiee.com/api/v1/library";
 const HEALTH_API_URL = "https://api.nordiee.com/health";
@@ -279,6 +280,8 @@ function Library({ accessToken, onDownload, onNotify, runningGameIds }: { access
   const cachedLibrary = readLibraryCache(email);
   const [status, setStatus] = useState<"loading" | "ready" | "offline" | "error">("loading");
   const [games, setGames] = useState<LibraryGame[]>([]);
+  const [libraryFilter, setLibraryFilter] = useState<LibraryFilter>("all");
+  const [libraryQuery, setLibraryQuery] = useState("");
   const [installingId, setInstallingId] = useState<string | null>(null);
   const [installedIds, setInstalledIds] = useState<string[]>([]);
   const [installedSizes, setInstalledSizes] = useState<Record<string, number>>({});
@@ -527,7 +530,14 @@ function Library({ accessToken, onDownload, onNotify, runningGameIds }: { access
   const offlineNotice = status === "offline" ? <p className="offline-notice" role="status">Offline mode - showing the last library saved on this device.</p> : null;
   if (!games.length) return <>{offlineNotice}<section className="empty-state"><div className="empty-mark" aria-hidden="true">N</div><h2>Your library is ready</h2><p>Games connected to your Nordiee account will appear here.</p></section></>;
   const queueNotice = queuedTransfers.length ? <div className="queue-notice" role="status"><span>{queuedTransfers.length} {queuedTransfers.length === 1 ? "game is" : "games are"} waiting in the transfer queue.</span><button className="text-button" type="button" onClick={clearTransferQueue}>Clear queue</button></div> : null;
-  return <>{offlineNotice}{queueNotice}{installError && <p className="install-error" role="alert">{installError}</p>}<section className="library-grid" aria-label="Your game library">{games.map((game) => {
+  const normalizedQuery = libraryQuery.trim().toLocaleLowerCase();
+  const visibleGames = games.filter((game) => {
+    const isInstalled = installedIds.includes(game.id) || game.installState === "INSTALLED";
+    if (libraryFilter === "installed" && !isInstalled) return false;
+    if (libraryFilter === "not-installed" && isInstalled) return false;
+    return !normalizedQuery || game.title.toLocaleLowerCase().includes(normalizedQuery);
+  });
+  return <>{offlineNotice}{queueNotice}{installError && <p className="install-error" role="alert">{installError}</p>}<section className="library-toolbar" aria-label="Library filters"><label><span className="sr-only">Search your library</span><input value={libraryQuery} onChange={(event) => setLibraryQuery(event.target.value)} placeholder="Search your library" type="search" /></label><div role="group" aria-label="Game filter">{(["all", "installed", "not-installed"] as const).map((filter) => <button className={libraryFilter === filter ? "active" : ""} key={filter} type="button" onClick={() => setLibraryFilter(filter)}>{filter === "all" ? "All games" : filter === "installed" ? "Installed" : "Not installed"}</button>)}</div></section>{visibleGames.length ? <section className="library-grid" aria-label="Your game library">{visibleGames.map((game) => {
     const isInstalling = installingId === game.id;
     const isQueued = queuedTransfers.some((transfer) => transfer.game.id === game.id);
     const transferInProgress = installingId !== null;
@@ -542,7 +552,7 @@ function Library({ accessToken, onDownload, onNotify, runningGameIds }: { access
     const primaryLabel = !isInstalled ? isQueued ? "Queued to install" : isInstalling ? percentage !== null ? `Downloading ${percentage}%` : "Preparing" : "Install" : checkState === "verifying" ? "Verifying" : checkState === "repair" ? isQueued ? "Queued to repair" : isInstalling ? percentage !== null ? `Repairing ${percentage}%` : "Preparing repair" : "Repair files" : "Verify files";
     const primaryAction = () => { if (!isInstalled) return void openInstallDialog(game); if (checkState === "repair") return enqueueTransfer(game, "repair"); return verify(game); };
     return <article className="library-card" key={game.id}><div className="library-cover" aria-hidden="true">N</div><div><p className="panel-label">{statusLabel}</p><h2>{game.title}</h2><p>{detail}</p><div className="library-actions">{isInstalled && <button className="library-action play-action" type="button" disabled={transferInProgress || isRunning || checkState === "repair"} onClick={() => void play(game)}>{isRunning ? "Running" : isInstalling ? percentage !== null ? `Updating ${percentage}%` : "Checking update" : "Play"}</button>}{isInstalled && <button className="library-action" type="button" disabled={isInstalling || isQueued || isRunning || checkState === "repair"} onClick={() => enqueueTransfer(game, "update")}>{isQueued ? "Queued" : "Check update"}</button>}<button className="library-action" type="button" disabled={isInstalling || isQueued || isRunning || checkState === "verifying"} onClick={primaryAction}>{primaryLabel}</button>{isInstalled && <button className="library-action" type="button" disabled={transferInProgress} onClick={() => void openFolder(game)}>Open folder</button>}{isInstalled && <button className="library-action" type="button" disabled={transferInProgress || isRunning} onClick={() => setEditingLaunchOptions(editingLaunchOptions === game.id ? null : game.id)}>Launch options</button>}{isInstalled && <button className="library-action uninstall-action" type="button" disabled={transferInProgress || isRunning} onClick={() => void uninstall(game)}>Uninstall</button>}</div>{editingLaunchOptions === game.id && <label className="launch-options"><span>Launch options</span><input value={launchOptions[game.id] ?? ""} onChange={(event) => saveLaunchOptions(game.id, event.target.value)} placeholder='Example: -windowed -log' spellCheck="false" /><small>Options are passed directly to this game only.</small></label>}</div></article>;
-  })}</section>{installDialog && <InstallDialog game={installDialog.game} root={installDialog.root} freeBytes={installDialog.freeBytes} onCancel={() => setInstallDialog(null)} onConfirm={() => { enqueueTransfer(installDialog.game, "install"); setInstallDialog(null); }} />}</>;
+  })}</section> : <section className="library-no-results"><div className="empty-mark" aria-hidden="true">N</div><h2>No games found</h2><p>Try a different title or library filter.</p></section>}{installDialog && <InstallDialog game={installDialog.game} root={installDialog.root} freeBytes={installDialog.freeBytes} onCancel={() => setInstallDialog(null)} onConfirm={() => { enqueueTransfer(installDialog.game, "install"); setInstallDialog(null); }} />}</>;
 }
 
 function InstallDialog({ game, root, freeBytes, onCancel, onConfirm }: { game: LibraryGame; root: string; freeBytes: number; onCancel: () => void; onConfirm: () => void }) {
