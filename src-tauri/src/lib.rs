@@ -164,12 +164,24 @@ async fn update_game(app: AppHandle, controls: State<'_, DownloadControls>, mani
 async fn download_manifest(app: &AppHandle, controls: &DownloadControls, manifest: &nordiee_core::GameManifest, install_root: &str, selected_files: Option<&HashSet<String>>, stale_files: Option<&HashSet<String>>, download_limit_mbps: Option<u64>) -> Result<serde_json::Value, String> {
     let game_directory = PathBuf::from(install_root).join(&manifest.game_id);
     tokio::fs::create_dir_all(&game_directory).await.map_err(|error| error.to_string())?;
-    let total_bytes = manifest.files.iter().filter(|file| selected_files.map_or(true, |selected| selected.contains(&file.path))).map(|file| file.size).sum::<u64>();
+    let selected_manifest_files: Vec<_> = manifest.files.iter().filter(|file| selected_files.map_or(true, |selected| selected.contains(&file.path))).collect();
+    let total_bytes = selected_manifest_files.iter().map(|file| file.size).sum::<u64>();
+    let mut required_bytes = 0_u64;
+    for file in &selected_manifest_files {
+        let final_path = safe_install_path(&game_directory, &file.path)?;
+        let partial_path = PathBuf::from(format!("{}.part", final_path.display()));
+        let partial_size = tokio::fs::metadata(partial_path).await.map(|metadata| metadata.len()).unwrap_or(0).min(file.size);
+        required_bytes += file.size - partial_size;
+    }
+    let available_bytes = fs2::available_space(&game_directory).map_err(|error| format!("Could not check free disk space: {error}"))?;
+    if available_bytes < required_bytes {
+        return Err(format!("Not enough free disk space. Nordiee needs {} more MB for this transfer.", (required_bytes - available_bytes).div_ceil(1_000_000)));
+    }
     let mut completed_bytes = 0_u64;
     let client = reqwest::Client::new();
     let mut rate_limiter = DownloadRateLimiter::new(download_limit_mbps);
 
-    for file in manifest.files.iter().filter(|file| selected_files.map_or(true, |selected| selected.contains(&file.path))) {
+    for file in selected_manifest_files {
         let final_path = safe_install_path(&game_directory, &file.path)?;
         let partial_path = PathBuf::from(format!("{}.part", final_path.display()));
         let parent = final_path.parent().ok_or("The game file path is invalid.")?;
