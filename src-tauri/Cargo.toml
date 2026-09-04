@@ -1,6 +1,6 @@
 [package]
 name = "nordiee-launcher"
-version = "0.1.28"
+version = "0.1.29"
 description = "Nordiee desktop game launcher"
 authors = ["Nordiee"]
 edition = "2021"
@@ -23,3 +23,6 @@ tauri-plugin-opener = "2"
 tauri-plugin-updater = "2"
 tokio = { version = "1", features = ["fs", "io-util"] }
 nordiee-core = { path = "../crates/nordiee-core" }
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.55"

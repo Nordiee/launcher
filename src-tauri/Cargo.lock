@@ -2288,7 +2288,7 @@ dependencies = [
 
 [[package]]
 name = "nordiee-launcher"
-version = "0.1.28"
+version = "0.1.29"
 dependencies = [
  "futures-util",
  "keyring",
@@ -2301,6 +2301,7 @@ dependencies = [
  "tauri-plugin-opener",
  "tauri-plugin-updater",
  "tokio",
+ "winreg",
 ]
 
 [[package]]

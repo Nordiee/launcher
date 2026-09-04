@@ -20,6 +20,34 @@ fn default_install_root() -> Result<String, String> {
     Ok(launcher_directory.join("NordieeApps").to_string_lossy().into_owned())
 }
 
+const STARTUP_VALUE_NAME: &str = "Nordiee Launcher";
+
+#[tauri::command]
+fn launch_at_startup_enabled() -> Result<bool, String> {
+    use winreg::enums::{HKEY_CURRENT_USER, KEY_READ};
+    use winreg::RegKey;
+
+    let current_user = RegKey::predef(HKEY_CURRENT_USER);
+    let run_key = current_user.open_subkey_with_flags("Software\\Microsoft\\Windows\\CurrentVersion\\Run", KEY_READ).map_err(|error| error.to_string())?;
+    Ok(run_key.get_value::<String, _>(STARTUP_VALUE_NAME).is_ok())
+}
+
+#[tauri::command]
+fn set_launch_at_startup(enabled: bool) -> Result<(), String> {
+    use winreg::enums::HKEY_CURRENT_USER;
+    use winreg::RegKey;
+
+    let current_user = RegKey::predef(HKEY_CURRENT_USER);
+    let (run_key, _) = current_user.create_subkey("Software\\Microsoft\\Windows\\CurrentVersion\\Run").map_err(|error| error.to_string())?;
+    if enabled {
+        let executable = std::env::current_exe().map_err(|error| error.to_string())?;
+        run_key.set_value(STARTUP_VALUE_NAME, &format!("\\\"{}\\\"", executable.display())).map_err(|error| error.to_string())?;
+    } else if let Err(error) = run_key.delete_value(STARTUP_VALUE_NAME) {
+        if error.kind() != std::io::ErrorKind::NotFound { return Err(error.to_string()); }
+    }
+    Ok(())
+}
+
 const ACCOUNT_SECRET_SERVICE: &str = "com.nordiee.launcher.account";
 
 struct RunningGames(Arc<Mutex<HashSet<String>>>);
@@ -415,7 +443,7 @@ pub fn run() {
         .manage(DownloadControls::new())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .invoke_handler(tauri::generate_handler![launcher_version, default_install_root, save_account_secret, load_account_secret, remove_account_secret, install_game, repair_game, update_game, pause_downloads, resume_downloads, cancel_downloads, verify_game, installed_game_version, uninstall_game, launch_game, diagnostics_check_endpoint, diagnostics_check_install_root])
+        .invoke_handler(tauri::generate_handler![launcher_version, default_install_root, launch_at_startup_enabled, set_launch_at_startup, save_account_secret, load_account_secret, remove_account_secret, install_game, repair_game, update_game, pause_downloads, resume_downloads, cancel_downloads, verify_game, installed_game_version, uninstall_game, launch_game, diagnostics_check_endpoint, diagnostics_check_install_root])
         .run(tauri::generate_context!())
         .expect("error while running Nordiee Launcher");
 }
