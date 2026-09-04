@@ -7,7 +7,7 @@ import { activeAccountEmail, clearActiveAccount, getAccountSession, listSavedAcc
 import { readLibraryCache, saveLibraryCache, type LibraryGame } from "./libraryCache";
 import { applyAvailableUpdate, type UpdateState } from "./updates";
 import { readNotifications, saveNotifications, type LauncherNotification } from "./notificationStore";
-import { clearTransferQueue as clearQueuedTransfers, enqueueTransfer as enqueueQueuedTransfer, listenForTransferQueue, moveTransferInQueue, readTransferQueue, removeTransferFromQueue, takeNextTransfer, type QueuedTransfer, type TransferKind } from "./transferQueue";
+import { activateTransferQueue, clearTransferQueue as clearQueuedTransfers, enqueueTransfer as enqueueQueuedTransfer, listenForTransferQueue, moveTransferInQueue, readTransferQueue, removeTransferFromQueue, takeNextTransfer, type QueuedTransfer, type TransferKind } from "./transferQueue";
 import { readRecentGames, recordRecentGame, type RecentGame } from "./recentGames";
 import { readLibraryFavorites, toggleLibraryFavorite } from "./libraryFavorites";
 
@@ -236,6 +236,7 @@ function Launcher({ session, onSwitchAccount, onLogOff, onRemoveAccount }: { ses
     }
   }, [download, downloadsPaused, pauseDownloadsWhilePlaying, runningGameIds.length]);
   useEffect(() => listenForTransferQueue(setQueuedTransfers), []);
+  useEffect(() => setQueuedTransfers(activateTransferQueue(session.email)), [session.email]);
   useEffect(() => setRecentGames(readRecentGames(session.email)), [session.email]);
   useEffect(() => setFavoriteGameIds(readLibraryFavorites(session.email)), [session.email]);
   useEffect(() => {
@@ -539,6 +540,9 @@ function Library({ accessToken, favoriteGameIds, onDownload, onNotify, onFavorit
     clearQueuedTransfers();
     onNotify("Transfer queue cleared", "The active transfer continues and partial files stay safe.", "info");
   };
+  useEffect(() => {
+    if (games.length && readTransferQueue().length) void processTransferQueue();
+  }, [games]);
   const openInstallDialog = async (game: LibraryGame) => {
     setInstallError("");
     try {

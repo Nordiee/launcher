@@ -5,6 +5,27 @@ export type QueuedTransfer = { id: string; game: LibraryGame; kind: TransferKind
 
 const transferQueueEvent = "nordiee-transfer-queue-changed";
 let currentTransferQueue: QueuedTransfer[] = [];
+let activeQueueKey = "nordiee.transferQueue";
+
+function queueKey(accountEmail: string) {
+  return `nordiee.transferQueue.${accountEmail.trim().toLocaleLowerCase()}`;
+}
+
+function storedQueue(key: string): QueuedTransfer[] {
+  try {
+    const saved = JSON.parse(localStorage.getItem(key) ?? "[]");
+    return Array.isArray(saved) ? saved.filter((transfer): transfer is QueuedTransfer => typeof transfer?.id === "string" && typeof transfer?.kind === "string" && typeof transfer?.game?.id === "string" && typeof transfer?.game?.title === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+export function activateTransferQueue(accountEmail: string) {
+  activeQueueKey = queueKey(accountEmail);
+  currentTransferQueue = storedQueue(activeQueueKey);
+  window.dispatchEvent(new CustomEvent<QueuedTransfer[]>(transferQueueEvent, { detail: currentTransferQueue }));
+  return currentTransferQueue;
+}
 
 export function readTransferQueue() {
   return currentTransferQueue;
@@ -12,6 +33,7 @@ export function readTransferQueue() {
 
 export function publishTransferQueue(nextQueue: QueuedTransfer[]) {
   currentTransferQueue = nextQueue;
+  localStorage.setItem(activeQueueKey, JSON.stringify(nextQueue));
   window.dispatchEvent(new CustomEvent<QueuedTransfer[]>(transferQueueEvent, { detail: nextQueue }));
 }
 
