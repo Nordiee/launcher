@@ -275,6 +275,7 @@ function Library({ accessToken, onDownload, onNotify, runningGameIds }: { access
   const [queuedTransfers, setQueuedTransfers] = useState<QueuedTransfer[]>([]);
   const queuedTransfersRef = useRef<QueuedTransfer[]>([]);
   const processingTransferRef = useRef(false);
+  const [installDialog, setInstallDialog] = useState<{ game: LibraryGame; root: string; freeBytes: number } | null>(null);
   const loadLibrary = async () => {
     setStatus("loading");
     try {
@@ -489,6 +490,16 @@ function Library({ accessToken, onDownload, onNotify, runningGameIds }: { access
     if (processingTransferRef.current) onNotify("Added to queue", `${game.title} will ${kind === "install" ? "install" : kind === "repair" ? "repair" : "update"} after the active transfer.`, "info");
     void processTransferQueue();
   };
+  const openInstallDialog = async (game: LibraryGame) => {
+    setInstallError("");
+    try {
+      const root = await installRoot();
+      const freeBytes = await invoke<number>("install_location_free_space", { installRoot: root });
+      setInstallDialog({ game, root, freeBytes });
+    } catch (error) {
+      setInstallError(error instanceof Error ? error.message : "We could not check the install location.");
+    }
+  };
   if (status === "loading") return <section className="library-state" aria-live="polite"><span className="library-loader" aria-hidden="true" /><h2>Loading your library</h2><p>Fetching the games connected to this account.</p></section>;
   if (status === "error") return <section className="library-state"><div className="empty-mark" aria-hidden="true">N</div><h2>We could not load your library</h2><p>Check your connection, then try again.</p><button className="primary-button" type="button" onClick={() => void loadLibrary()}>Try again</button></section>;
   const offlineNotice = status === "offline" ? <p className="offline-notice" role="status">Offline mode - showing the last library saved on this device.</p> : null;
@@ -507,9 +518,21 @@ function Library({ accessToken, onDownload, onNotify, runningGameIds }: { access
     const displaySize = installedSize ?? game.installSizeBytes;
     const detail = isInstalling && percentage !== null ? `${percentage}% downloaded` : updateStatus[game.id] ?? (checkState === "verified" ? "All installed files verified." : checkState === "repair" ? "One or more files need repair." : displaySize ? `${isInstalled ? "Installed" : "Download"} · ${(displaySize / 1_000_000_000).toFixed(1)} GB` : "Size will be available soon");
     const primaryLabel = !isInstalled ? isQueued ? "Queued to install" : isInstalling ? percentage !== null ? `Downloading ${percentage}%` : "Preparing" : "Install" : checkState === "verifying" ? "Verifying" : checkState === "repair" ? isQueued ? "Queued to repair" : isInstalling ? percentage !== null ? `Repairing ${percentage}%` : "Preparing repair" : "Repair files" : "Verify files";
-    const primaryAction = () => { if (!isInstalled) return enqueueTransfer(game, "install"); if (checkState === "repair") return enqueueTransfer(game, "repair"); return verify(game); };
+    const primaryAction = () => { if (!isInstalled) return void openInstallDialog(game); if (checkState === "repair") return enqueueTransfer(game, "repair"); return verify(game); };
     return <article className="library-card" key={game.id}><div className="library-cover" aria-hidden="true">N</div><div><p className="panel-label">{statusLabel}</p><h2>{game.title}</h2><p>{detail}</p><div className="library-actions">{isInstalled && <button className="library-action play-action" type="button" disabled={transferInProgress || isRunning || checkState === "repair"} onClick={() => void play(game)}>{isRunning ? "Running" : isInstalling ? percentage !== null ? `Updating ${percentage}%` : "Checking update" : "Play"}</button>}{isInstalled && <button className="library-action" type="button" disabled={isInstalling || isQueued || isRunning || checkState === "repair"} onClick={() => enqueueTransfer(game, "update")}>{isQueued ? "Queued" : "Check update"}</button>}<button className="library-action" type="button" disabled={isInstalling || isQueued || isRunning || checkState === "verifying"} onClick={primaryAction}>{primaryLabel}</button>{isInstalled && <button className="library-action" type="button" disabled={transferInProgress} onClick={() => void openFolder(game)}>Open folder</button>}{isInstalled && <button className="library-action" type="button" disabled={transferInProgress || isRunning} onClick={() => setEditingLaunchOptions(editingLaunchOptions === game.id ? null : game.id)}>Launch options</button>}{isInstalled && <button className="library-action uninstall-action" type="button" disabled={transferInProgress || isRunning} onClick={() => void uninstall(game)}>Uninstall</button>}</div>{editingLaunchOptions === game.id && <label className="launch-options"><span>Launch options</span><input value={launchOptions[game.id] ?? ""} onChange={(event) => saveLaunchOptions(game.id, event.target.value)} placeholder='Example: -windowed -log' spellCheck="false" /><small>Options are passed directly to this game only.</small></label>}</div></article>;
-  })}</section></>;
+  })}</section>{installDialog && <InstallDialog game={installDialog.game} root={installDialog.root} freeBytes={installDialog.freeBytes} onCancel={() => setInstallDialog(null)} onConfirm={() => { enqueueTransfer(installDialog.game, "install"); setInstallDialog(null); }} />}</>;
+}
+
+function InstallDialog({ game, root, freeBytes, onCancel, onConfirm }: { game: LibraryGame; root: string; freeBytes: number; onCancel: () => void; onConfirm: () => void }) {
+  useEffect(() => {
+    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === "Escape") onCancel(); };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [onCancel]);
+  const requiredBytes = game.installSizeBytes ?? 0;
+  const hasSpace = freeBytes >= requiredBytes;
+  const gigabytes = (bytes: number) => `${(bytes / 1_000_000_000).toFixed(1)} GB`;
+  return <div className="install-dialog-overlay" role="presentation" onMouseDown={onCancel}><section className="install-dialog" role="dialog" aria-modal="true" aria-labelledby="install-dialog-title" onMouseDown={(event) => event.stopPropagation()}><p className="eyebrow">INSTALL GAME</p><h2 id="install-dialog-title">Install {game.title}</h2><p className="install-dialog-copy">Nordiee verifies files during download and keeps partial files if the transfer is paused.</p><dl><div><dt>Location</dt><dd title={root}>{root}</dd></div><div><dt>Required</dt><dd>{requiredBytes ? gigabytes(requiredBytes) : "Size pending"}</dd></div><div><dt>Available</dt><dd className={hasSpace ? "space-ready" : "space-low"}>{gigabytes(freeBytes)}</dd></div></dl>{!hasSpace && <p className="install-dialog-error" role="alert">Not enough free disk space for this game.</p>}<div className="install-dialog-actions"><button className="library-action" type="button" onClick={onCancel}>Cancel</button><button className="primary-button" type="button" disabled={!hasSpace} onClick={onConfirm}>Add to queue</button></div></section></div>;
 }
 function Downloads({ download, paused, onTogglePaused }: { download: DownloadActivity | null; paused: boolean; onTogglePaused: () => void }) {
   if (!download) return <EmptyState title="No active downloads" text="Game installs, updates and repairs will appear here." action="Browse library" />;

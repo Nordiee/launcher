@@ -20,6 +20,13 @@ fn default_install_root() -> Result<String, String> {
     Ok(launcher_directory.join("NordieeApps").to_string_lossy().into_owned())
 }
 
+#[tauri::command]
+fn install_location_free_space(install_root: String) -> Result<u64, String> {
+    let directory = PathBuf::from(install_root);
+    std::fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
+    fs2::available_space(directory).map_err(|error| error.to_string())
+}
+
 const STARTUP_VALUE_NAME: &str = "Nordiee Launcher";
 
 #[tauri::command]
@@ -516,7 +523,7 @@ pub fn run() {
         .manage(DownloadControls::new())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .invoke_handler(tauri::generate_handler![launcher_version, default_install_root, launch_at_startup_enabled, set_launch_at_startup, save_account_secret, load_account_secret, remove_account_secret, install_game, repair_game, update_game, pause_downloads, resume_downloads, cancel_downloads, verify_game, installed_game_version, installed_game_size, uninstall_game, open_game_folder, launch_game, diagnostics_check_endpoint, diagnostics_check_install_root])
+        .invoke_handler(tauri::generate_handler![launcher_version, default_install_root, install_location_free_space, launch_at_startup_enabled, set_launch_at_startup, save_account_secret, load_account_secret, remove_account_secret, install_game, repair_game, update_game, pause_downloads, resume_downloads, cancel_downloads, verify_game, installed_game_version, installed_game_size, uninstall_game, open_game_folder, launch_game, diagnostics_check_endpoint, diagnostics_check_install_root])
         .run(tauri::generate_context!())
         .expect("error while running Nordiee Launcher");
 }
