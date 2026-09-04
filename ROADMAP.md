@@ -18,16 +18,15 @@ Detaljna platform vizija je u workspace dokumentu `NORDIEE — Complete Product 
 - `Ctrl + K` Library search
 - Zaštita od path traversal-a pri instalaciji
 - Friends ekran: add request, incoming requests, accept, decline i unfriend
+- Friends presence: Online, Away, Busy, Invisible i Offline
 
 ## Aktivno
 
-- `v0.1.49` signed Windows installer release je u GitHub Actions pakovanju.
-- Railway backend ima Friends API, profile endpoint i zaštite za duplirane zahteve.
+- Presence UI i API commitovi čekaju GitHub push, čim mrežna veza agenta bude dostupna.
 
 ## Sledeći alpha prioriteti
 
-1. Friends presence: Online, Away, Busy, Invisible, Offline
-2. Profile: avatar, bio, javni profil i privacy kontrole
+1. Profile: avatar, bio, javni profil i privacy kontrole
 3. Multiple game libraries i izbor diska pri instalaciji
 4. Locate existing installation bez novog download-a
 5. Move game između biblioteka bez reinstalacije
