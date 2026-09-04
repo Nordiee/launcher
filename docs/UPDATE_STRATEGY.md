@@ -14,7 +14,7 @@ This is a release requirement, not an optional feature.
 ## Technical implementation
 
 - Tauri updater checks before the account screen. When a newer signed package exists, it downloads and installs before launcher access is allowed.
-- Windows uses the passive installer mode so the update shows a small progress window without manual setup steps.
+- Windows uses quiet installer mode. Nordiee shows its own update screen before it exits, then the signed installer applies the update without a separate Windows installer window.
 - Every release artifact is signed with the Nordiee private updater key. The public key is embedded in `tauri.conf.json`.
 - The update feed is served from `https://github.com/Nordiee/launcher/releases/latest/download/latest.json`.
 - The private signing key must be stored only in GitHub Actions secrets. It must never be committed to this repository or sent to the launcher.
