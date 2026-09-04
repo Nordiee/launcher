@@ -12,7 +12,7 @@ import { clearRecentGames, readRecentGames, recordRecentGame, type RecentGame } 
 import { readLibraryFavorites, toggleLibraryFavorite } from "./libraryFavorites";
 import { addPlaytime, readPlaytime, type PlaytimeByGame } from "./playtimeStore";
 
-type View = "Home" | "Library" | "Downloads" | "Friends" | "Settings";
+type View = "Home" | "Library" | "Downloads" | "Friends" | "Profile" | "Settings";
 type AuthMode = "sign-in" | "sign-up";
 type Session = SavedAccount & AccountSecret;
 type AuthResponse = { accessToken: string; refreshToken: string; username: string; email: string };
@@ -341,7 +341,25 @@ function Launcher({ session, onSwitchAccount, onLogOff, onRemoveAccount }: { ses
   const saveLauncherNotificationsEnabled = (enabled: boolean) => { setLauncherNotificationsEnabled(enabled); localStorage.setItem("nordiee.launcherNotifications", String(enabled)); };
   const saveReduceMotion = (enabled: boolean) => { setReduceMotion(enabled); localStorage.setItem("nordiee.reduceMotion", String(enabled)); };
   if (view === "Friends") return <div className="launcher-shell"><a className="skip-link" href="#friends-content">Skip to content</a><aside className="sidebar" aria-label="Launcher navigation"><div className="sidebar-brand"><img src="/logo.svg" alt="Nordiee" /><span>NORDIEE</span></div><nav className="navigation">{navigation.map((item) => <button className={view === item.label ? "nav-item active" : "nav-item"} key={item.label} onClick={() => setView(item.label)} type="button"><span className="nav-icon">{item.icon}</span>{item.label}</button>)}</nav><div className="sidebar-bottom"><button className="nav-item" onClick={() => setView("Settings")} type="button"><span className="nav-icon"><SettingsIcon /></span>Settings</button></div></aside><Friends accessToken={session.accessToken} onBack={() => setView("Home")} /></div>;
-  return <div className="launcher-shell"><a className="skip-link" href="#main-content">Skip to content</a><aside className="sidebar" aria-label="Launcher navigation"><div className="sidebar-brand"><img src="/logo.svg" alt="Nordiee" /><span>NORDIEE</span></div><nav className="navigation">{navigation.map((item) => <button className={view === item.label ? "nav-item active" : "nav-item"} key={item.label} onClick={() => setView(item.label)} type="button"><span className="nav-icon">{item.icon}</span>{item.label}</button>)}</nav><div className="sidebar-bottom"><button className={view === "Settings" ? "nav-item active" : "nav-item"} onClick={() => setView("Settings")} type="button"><span className="nav-icon"><SettingsIcon /></span>Settings</button><div className="account-menu"><button className="profile" type="button" aria-expanded={accountOpen} aria-haspopup="menu" onClick={() => setAccountOpen(!accountOpen)}><span className="avatar">{session.displayName[0]?.toUpperCase()}</span><span><strong>{session.displayName}</strong><small>{session.email}</small></span><ChevronDownIcon size={15} /></button>{accountOpen && <div className="account-popover" role="menu"><button type="button" role="menuitem" onClick={onSwitchAccount}>Switch account</button><button type="button" role="menuitem" onClick={() => void onLogOff()}>Log off</button><button className="danger-action" type="button" role="menuitem" onClick={() => void remove()}>Remove this account</button></div>}</div></div></aside><main id="main-content" className="content" tabIndex={-1}><header className="topbar"><div><p className="eyebrow">NORDIEE LAUNCHER</p><h1>{view}</h1></div><div className="topbar-actions"><div className={`service-status ${serviceStatus}`} role="status"><span /> {serviceLabel}</div><NotificationCenter notifications={notifications} open={notificationsOpen} unreadCount={unreadCount} onToggle={() => { const next = !notificationsOpen; setNotificationsOpen(next); if (next) markNotificationsRead(); }} onClear={clearNotifications} /></div></header>{view === "Home" && <Home download={download} onClearRecent={() => setRecentGames(clearRecentGames(session.email))} playtimeByGame={playtimeByGame} queuedTransfers={queuedTransfers} recentGames={recentGames} onOpenLibrary={() => setView("Library")} onOpenDownloads={() => setView("Downloads")} />}{view === "Library" && <Library accessToken={session.accessToken} favoriteGameIds={favoriteGameIds} recentGames={recentGames} searchRequest={librarySearchRequest} playtimeByGame={playtimeByGame} onDownload={setDownload} onNotify={addNotification} onFavoriteToggle={(gameId) => setFavoriteGameIds(toggleLibraryFavorite(session.email, gameId))} onGameLaunched={(game) => setRecentGames(recordRecentGame(session.email, game))} runningGameIds={runningGameIds} />}{view === "Downloads" && <Downloads download={download} queuedTransfers={queuedTransfers} paused={downloadsPaused} onTogglePaused={() => void toggleDownloadsPaused()} />}{view === "Settings" && <Settings launcherNotificationsEnabled={launcherNotificationsEnabled} manualUpdateState={manualUpdateState} onLauncherNotificationsEnabledChange={saveLauncherNotificationsEnabled} onManualUpdateCheck={() => void checkForLauncherUpdate(setManualUpdateState)} onReduceMotionChange={saveReduceMotion} pauseDownloadsWhilePlaying={pauseDownloadsWhilePlaying} reduceMotion={reduceMotion} onPauseDownloadsWhilePlayingChange={savePauseDownloadsWhilePlaying} />}</main></div>;
+  return <div className="launcher-shell">
+    <a className="skip-link" href="#main-content">Skip to content</a>
+    <aside className="sidebar" aria-label="Launcher navigation">
+      <div className="sidebar-brand"><img src="/logo.svg" alt="Nordiee" /><span>NORDIEE</span></div>
+      <nav className="navigation">{navigation.map((item) => <button className={view === item.label ? "nav-item active" : "nav-item"} key={item.label} onClick={() => setView(item.label)} type="button"><span className="nav-icon">{item.icon}</span>{item.label}</button>)}</nav>
+      <div className="sidebar-bottom">
+        <button className={view === "Settings" ? "nav-item active" : "nav-item"} onClick={() => setView("Settings")} type="button"><span className="nav-icon"><SettingsIcon /></span>Settings</button>
+        <div className="account-menu"><button className="profile" type="button" aria-expanded={accountOpen} aria-haspopup="menu" onClick={() => setAccountOpen(!accountOpen)}><span className="avatar">{session.displayName[0]?.toUpperCase()}</span><span><strong>{session.displayName}</strong><small>{session.email}</small></span><ChevronDownIcon size={15} /></button>{accountOpen && <div className="account-popover" role="menu"><button type="button" role="menuitem" onClick={() => { setAccountOpen(false); setView("Profile"); }}>Profile</button><button type="button" role="menuitem" onClick={onSwitchAccount}>Switch account</button><button type="button" role="menuitem" onClick={() => void onLogOff()}>Log off</button><button className="danger-action" type="button" role="menuitem" onClick={() => void remove()}>Remove this account</button></div>}</div>
+      </div>
+    </aside>
+    <main id="main-content" className="content" tabIndex={-1}>
+      <header className="topbar"><div><p className="eyebrow">NORDIEE LAUNCHER</p><h1>{view}</h1></div><div className="topbar-actions"><div className={`service-status ${serviceStatus}`} role="status"><span /> {serviceLabel}</div><NotificationCenter notifications={notifications} open={notificationsOpen} unreadCount={unreadCount} onToggle={() => { const next = !notificationsOpen; setNotificationsOpen(next); if (next) markNotificationsRead(); }} onClear={clearNotifications} /></div></header>
+      {view === "Home" && <Home download={download} onClearRecent={() => setRecentGames(clearRecentGames(session.email))} playtimeByGame={playtimeByGame} queuedTransfers={queuedTransfers} recentGames={recentGames} onOpenLibrary={() => setView("Library")} onOpenDownloads={() => setView("Downloads")} />}
+      {view === "Library" && <Library accessToken={session.accessToken} favoriteGameIds={favoriteGameIds} recentGames={recentGames} searchRequest={librarySearchRequest} playtimeByGame={playtimeByGame} onDownload={setDownload} onNotify={addNotification} onFavoriteToggle={(gameId) => setFavoriteGameIds(toggleLibraryFavorite(session.email, gameId))} onGameLaunched={(game) => setRecentGames(recordRecentGame(session.email, game))} runningGameIds={runningGameIds} />}
+      {view === "Downloads" && <Downloads download={download} queuedTransfers={queuedTransfers} paused={downloadsPaused} onTogglePaused={() => void toggleDownloadsPaused()} />}
+      {view === "Profile" && <Profile accessToken={session.accessToken} displayName={session.displayName} email={session.email} />}
+      {view === "Settings" && <Settings launcherNotificationsEnabled={launcherNotificationsEnabled} manualUpdateState={manualUpdateState} onLauncherNotificationsEnabledChange={saveLauncherNotificationsEnabled} onManualUpdateCheck={() => void checkForLauncherUpdate(setManualUpdateState)} onReduceMotionChange={saveReduceMotion} pauseDownloadsWhilePlaying={pauseDownloadsWhilePlaying} reduceMotion={reduceMotion} onPauseDownloadsWhilePlayingChange={savePauseDownloadsWhilePlaying} />}
+    </main>
+  </div>;
 }
 
 function NotificationCenter({ notifications, open, unreadCount, onToggle, onClear }: { notifications: LauncherNotification[]; open: boolean; unreadCount: number; onToggle: () => void; onClear: () => void }) {
@@ -454,6 +472,41 @@ function Friends({ accessToken, onBack }: { accessToken: string; onBack: () => v
     </section>
   </main>;
 }
+type ProfileVisibility = "PUBLIC" | "FRIENDS" | "PRIVATE";
+type EditableProfile = { bio: string | null; avatarUrl: string | null; profileVisibility: ProfileVisibility };
+
+function Profile({ accessToken, displayName, email }: { accessToken: string; displayName: string; email: string }) {
+  const [profile, setProfile] = useState<EditableProfile>({ bio: null, avatarUrl: null, profileVisibility: "PUBLIC" });
+  const [state, setState] = useState<"loading" | "ready" | "error">("loading");
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState("");
+  const load = useCallback(async () => {
+    setState("loading");
+    try {
+      const response = await fetch(`${PROFILE_API_URL}/me/details`, { headers: { Authorization: `Bearer ${accessToken}` } });
+      if (!response.ok) throw new Error();
+      const next = await response.json() as EditableProfile;
+      setProfile(next);
+      setState("ready");
+    } catch { setState("error"); }
+  }, [accessToken]);
+  useEffect(() => { void load(); }, [load]);
+  const save = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setSaving(true);
+    setMessage("");
+    try {
+      const response = await fetch(`${PROFILE_API_URL}/me`, { method: "PATCH", headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" }, body: JSON.stringify(profile) });
+      if (!response.ok) { const body = await response.json().catch(() => null) as { error?: string } | null; throw new Error(body?.error ?? "Could not save profile."); }
+      setProfile(await response.json() as EditableProfile);
+      setMessage("Profile saved.");
+    } catch (error) { setMessage(error instanceof Error ? error.message : "Could not save profile."); }
+    finally { setSaving(false); }
+  };
+  const initials = displayName.slice(0, 1).toUpperCase();
+  return <section className="profile-page" aria-label="Profile settings"><header className="profile-hero"><span className="profile-avatar-large" style={profile.avatarUrl ? { backgroundImage: `url(${profile.avatarUrl})` } : undefined}>{profile.avatarUrl ? <span className="sr-only">{displayName}</span> : initials}</span><div><p className="eyebrow">ACCOUNT PROFILE</p><h2>{displayName}</h2><p>{email}</p></div></header>{state === "loading" ? <p>Loading profile...</p> : state === "error" ? <div className="panel profile-error"><p>We could not load your profile.</p><button className="text-button" type="button" onClick={() => void load()}>Try again</button></div> : <form className="panel profile-form" onSubmit={(event) => void save(event)}><div className="panel-heading"><div><p className="panel-label">PUBLIC IDENTITY</p><h3>How people see you</h3></div></div><label>Avatar image URL<input type="url" value={profile.avatarUrl ?? ""} onChange={(event) => setProfile((current) => ({ ...current, avatarUrl: event.target.value || null }))} placeholder="https://..." autoComplete="url" /></label><label>Bio<textarea value={profile.bio ?? ""} onChange={(event) => setProfile((current) => ({ ...current, bio: event.target.value || null }))} maxLength={280} rows={4} placeholder="Tell your friends a little about yourself." /></label><div className="profile-field-row"><label>Profile visibility<select value={profile.profileVisibility} onChange={(event) => setProfile((current) => ({ ...current, profileVisibility: event.target.value as ProfileVisibility }))}><option value="PUBLIC">Public</option><option value="FRIENDS">Friends only</option><option value="PRIVATE">Private</option></select></label><p>Only a secure HTTPS avatar URL is accepted. Image upload comes with the R2 media flow.</p></div><footer><button className="primary-button" type="submit" disabled={saving}>{saving ? "Saving" : "Save profile"}</button>{message && <span className={message === "Profile saved." ? "profile-message success" : "profile-message"} role="status">{message}</span>}</footer></form>}</section>;
+}
+
 function Library({ accessToken, favoriteGameIds, recentGames, searchRequest, playtimeByGame, onDownload, onNotify, onFavoriteToggle, onGameLaunched, runningGameIds }: { accessToken: string; favoriteGameIds: string[]; recentGames: RecentGame[]; searchRequest: number; playtimeByGame: PlaytimeByGame; onDownload: (download: DownloadActivity | null) => void; onNotify: (title: string, message: string, kind?: NotificationKind) => void; onFavoriteToggle: (gameId: string) => void; onGameLaunched: (game: Omit<RecentGame, "lastPlayedAt">) => void; runningGameIds: string[] }) {
   const email = activeAccountEmail() ?? "";
   const cachedLibrary = readLibraryCache(email);
