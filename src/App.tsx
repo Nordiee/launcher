@@ -243,6 +243,16 @@ function Launcher({ session, onSwitchAccount, onLogOff, onRemoveAccount }: { ses
     return () => { void unlisten.then((cleanup) => cleanup()); };
   }, [session.email]);
   useEffect(() => {
+    const interval = window.setInterval(() => {
+      const now = Date.now();
+      for (const [gameId, startedAt] of Object.entries(gameStartedAtRef.current)) {
+        gameStartedAtRef.current[gameId] = now;
+        setPlaytimeByGame(addPlaytime(session.email, gameId, (now - startedAt) / 1_000));
+      }
+    }, 60_000);
+    return () => window.clearInterval(interval);
+  }, [session.email]);
+  useEffect(() => {
     const shouldPause = pauseDownloadsWhilePlaying && runningGameIds.length > 0;
     if (shouldPause && download && !downloadsPaused) {
       autoPausedForGameRef.current = true;
