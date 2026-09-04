@@ -177,6 +177,22 @@ async fn installed_game_version(game_id: String, install_root: String) -> Result
     Ok(Some(manifest.version))
 }
 
+#[tauri::command]
+async fn uninstall_game(game_id: String, install_root: String) -> Result<(), String> {
+    if !safe_game_id(&game_id) {
+        return Err("The game identifier is invalid.".to_string());
+    }
+    let game_directory = PathBuf::from(&install_root).join(&game_id);
+    if !game_directory.starts_with(Path::new(&install_root)) {
+        return Err("The game installation path is invalid.".to_string());
+    }
+    match tokio::fs::remove_dir_all(&game_directory).await {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
 async fn hash_file(path: &Path) -> Result<String, String> {
     let mut file = tokio::fs::File::open(path).await.map_err(|_| "A game file is missing.".to_string())?;
     let mut checksum = Sha256::new();
@@ -207,7 +223,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .invoke_handler(tauri::generate_handler![launcher_version, default_install_root, save_account_secret, load_account_secret, remove_account_secret, install_game, repair_game, verify_game, installed_game_version])
+        .invoke_handler(tauri::generate_handler![launcher_version, default_install_root, save_account_secret, load_account_secret, remove_account_secret, install_game, repair_game, verify_game, installed_game_version, uninstall_game])
         .run(tauri::generate_context!())
         .expect("error while running Nordiee Launcher");
 }
