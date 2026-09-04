@@ -4,6 +4,7 @@
 //! will live here, independently from Tauri commands.
 
 use serde::{Deserialize, Serialize};
+use url::Url;
 
 pub const LAUNCHER_CORE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -21,6 +22,8 @@ pub struct ManifestFile {
     pub path: String,
     pub size: u64,
     pub sha256: String,
+    #[serde(rename = "sourceUrl")]
+    pub source_url: String,
 }
 
 impl GameManifest {
@@ -56,6 +59,10 @@ fn validate_manifest_file(file: &ManifestFile) -> Result<(), &'static str> {
     }
     if file.sha256.len() != 64 || !file.sha256.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return Err("manifest file hash must be a SHA-256 hex digest");
+    }
+    let source_url = Url::parse(&file.source_url).map_err(|_| "manifest file source URL is invalid")?;
+    if source_url.scheme() != "https" || source_url.host_str().is_none() || source_url.fragment().is_some() {
+        return Err("manifest file source URL must be an HTTPS URL");
     }
     Ok(())
 }
@@ -244,6 +251,7 @@ mod tests {
                 path: "Game/Content/pak01.pak".into(),
                 size: 42,
                 sha256: "a".repeat(64),
+                source_url: "https://downloads.nordiee.com/games/nordiee-demo/0.1.0/pak01.pak".into(),
             }],
         };
         assert!(manifest.validate().is_ok());
@@ -258,6 +266,7 @@ mod tests {
                 path: "../Windows/System32/file.dll".into(),
                 size: 42,
                 sha256: "a".repeat(64),
+                source_url: "https://downloads.nordiee.com/games/nordiee-demo/0.1.0/file.dll".into(),
             }],
         };
         assert_eq!(manifest.validate(), Err("manifest file path must be a safe relative path"));
@@ -268,9 +277,24 @@ mod tests {
         let manifest = GameManifest {
             game_id: "nordiee-demo".into(),
             version: "0.1.0".into(),
-            files: vec![ManifestFile { path: "Game.exe".into(), size: 42, sha256: "not-a-hash".into() }],
+            files: vec![ManifestFile { path: "Game.exe".into(), size: 42, sha256: "not-a-hash".into(), source_url: "https://downloads.nordiee.com/games/nordiee-demo/0.1.0/Game.exe".into() }],
         };
         assert_eq!(manifest.validate(), Err("manifest file hash must be a SHA-256 hex digest"));
+    }
+
+    #[test]
+    fn rejects_non_https_download_urls() {
+        let manifest = GameManifest {
+            game_id: "nordiee-demo".into(),
+            version: "0.1.0".into(),
+            files: vec![ManifestFile {
+                path: "Game.exe".into(),
+                size: 42,
+                sha256: "a".repeat(64),
+                source_url: "http://downloads.nordiee.com/games/nordiee-demo/0.1.0/Game.exe".into(),
+            }],
+        };
+        assert_eq!(manifest.validate(), Err("manifest file source URL must be an HTTPS URL"));
     }
 
     #[test]

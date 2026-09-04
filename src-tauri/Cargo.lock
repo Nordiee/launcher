@@ -2245,11 +2245,12 @@ name = "nordiee-core"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "url",
 ]
 
 [[package]]
 name = "nordiee-launcher"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "keyring",
  "nordiee-core",
