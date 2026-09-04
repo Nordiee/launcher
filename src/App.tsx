@@ -13,7 +13,7 @@ type Session = SavedAccount & AccountSecret;
 type AuthResponse = { accessToken: string; refreshToken: string; username: string; email: string };
 type AccessView = "accounts" | "credentials";
 type VerificationState = "verifying" | "verified" | "repair";
-type DownloadActivity = { gameId: string; title: string; phase: string; downloadedBytes?: number; totalBytes?: number };
+type DownloadActivity = { gameId: string; title: string; phase: string; downloadedBytes?: number; totalBytes?: number; speedBytesPerSecond?: number; sampledAt?: number };
 
 const API_BASE_URL = "https://api.nordiee.com/api/v1/auth";
 const LIBRARY_API_URL = "https://api.nordiee.com/api/v1/library";
@@ -150,7 +150,13 @@ function Launcher({ session, onSwitchAccount, onLogOff, onRemoveAccount }: { ses
   const [download, setDownload] = useState<DownloadActivity | null>(null);
   const [runningGameIds, setRunningGameIds] = useState<string[]>([]);
   useEffect(() => {
-    const unlisten = listen<{ gameId: string; downloadedBytes: number; totalBytes: number }>("game-download-progress", (event) => setDownload((current) => ({ ...event.payload, title: current?.gameId === event.payload.gameId ? current.title : event.payload.gameId, phase: current?.phase ?? "Downloading" })));
+    const unlisten = listen<{ gameId: string; downloadedBytes: number; totalBytes: number }>("game-download-progress", (event) => setDownload((current) => {
+      const now = Date.now();
+      const isSameGame = current?.gameId === event.payload.gameId;
+      const elapsed = isSameGame && current.sampledAt ? now - current.sampledAt : 0;
+      const speedBytesPerSecond = elapsed > 0 && isSameGame && current.downloadedBytes !== undefined ? Math.max(0, (event.payload.downloadedBytes - current.downloadedBytes) * 1000 / elapsed) : current?.speedBytesPerSecond;
+      return { ...event.payload, title: isSameGame ? current.title : event.payload.gameId, phase: current?.phase ?? "Downloading", speedBytesPerSecond, sampledAt: now };
+    }));
     return () => { void unlisten.then((cleanup) => cleanup()); };
   }, []);
   useEffect(() => {
@@ -194,9 +200,10 @@ function Library({ accessToken, onDownload, runningGameIds }: { accessToken: str
   };
   useEffect(() => { void loadLibrary(); }, [accessToken, email]);
   useEffect(() => {
-    const unlisten = listen<{ gameId: string; downloadedBytes: number; totalBytes: number }>("game-download-progress", (event) => { setDownloadProgress(event.payload); onDownload({ ...event.payload, title: games.find((game) => game.id === event.payload.gameId)?.title ?? event.payload.gameId, phase: "Downloading" }); });
+    const unlisten = listen<{ gameId: string; downloadedBytes: number; totalBytes: number }>("game-download-progress", (event) => setDownloadProgress(event.payload));
     return () => { void unlisten.then((cleanup) => cleanup()); };
-  }, [games, onDownload]);
+  }, []);
+  const startDownload = (game: LibraryGame, phase: string) => onDownload({ gameId: game.id, title: game.title, phase });
   useEffect(() => {
     let active = true;
     const findInstalledGames = async () => {
@@ -229,6 +236,7 @@ function Library({ accessToken, onDownload, runningGameIds }: { accessToken: str
     setInstallError("");
     setInstallingId(game.id);
     setDownloadProgress(null);
+    startDownload(game, "Installing");
     try {
       const response = await fetch(`${LIBRARY_API_URL}/${game.id}/manifest`, { headers: { Authorization: `Bearer ${accessToken}` } });
       if (!response.ok) throw new Error("This game does not have an active install build yet.");
@@ -257,6 +265,7 @@ function Library({ accessToken, onDownload, runningGameIds }: { accessToken: str
     setInstallError("");
     setInstallingId(game.id);
     setDownloadProgress(null);
+    startDownload(game, "Repairing");
     try {
       await invoke("repair_game", { gameId: game.id, installRoot: await installRoot() });
       setVerification((current) => ({ ...current, [game.id]: "verified" }));
@@ -285,6 +294,7 @@ function Library({ accessToken, onDownload, runningGameIds }: { accessToken: str
     setInstallError("");
     setInstallingId(game.id);
     setDownloadProgress(null);
+    startDownload(game, "Updating before launch");
     try {
       const response = await fetch(`${LIBRARY_API_URL}/${game.id}/manifest`, { headers: { Authorization: `Bearer ${accessToken}` } });
       if (!response.ok) throw new Error("We could not check this game for updates.");
@@ -303,6 +313,7 @@ function Library({ accessToken, onDownload, runningGameIds }: { accessToken: str
     setInstallError("");
     setInstallingId(game.id);
     setDownloadProgress(null);
+    startDownload(game, "Checking for updates");
     try {
       const response = await fetch(`${LIBRARY_API_URL}/${game.id}/manifest`, { headers: { Authorization: `Bearer ${accessToken}` } });
       if (!response.ok) throw new Error("We could not check this game for updates.");
@@ -338,7 +349,8 @@ function Downloads({ download }: { download: DownloadActivity | null }) {
   if (!download) return <EmptyState title="No active downloads" text="Game installs, updates and repairs will appear here." action="Browse library" />;
   const percentage = download.totalBytes ? Math.min(100, Math.round(((download.downloadedBytes ?? 0) / download.totalBytes) * 100)) : null;
   const transferred = download.downloadedBytes && download.totalBytes ? `${Math.round(download.downloadedBytes / 1_000_000)} MB of ${Math.round(download.totalBytes / 1_000_000)} MB` : "Preparing file transfer";
-  return <section className="downloads-panel" aria-label="Active downloads"><article className="download-card"><div className="download-card-heading"><div><p className="panel-label">{download.phase}</p><h2>{download.title}</h2></div><strong>{percentage === null ? "Starting" : `${percentage}%`}</strong></div><div className="download-progress" role="progressbar" aria-label={`${download.title} download progress`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={percentage ?? undefined}><span style={{ width: `${percentage ?? 4}%` }} /></div><p>{transferred}</p></article></section>;
+  const speed = download.speedBytesPerSecond ? `${(download.speedBytesPerSecond / 1_000_000).toFixed(1)} MB/s` : "Calculating speed";
+  return <section className="downloads-panel" aria-label="Active downloads"><article className="download-card"><div className="download-card-heading"><div><p className="panel-label">{download.phase}</p><h2>{download.title}</h2></div><strong>{percentage === null ? "Starting" : `${percentage}%`}</strong></div><div className="download-progress" role="progressbar" aria-label={`${download.title} download progress`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={percentage ?? undefined}><span style={{ width: `${percentage ?? 4}%` }} /></div><div className="download-meta"><p>{transferred}</p><strong>{speed}</strong></div></article></section>;
 }
 function EmptyState({ title, text, action }: { title: string; text: string; action: string }) { return <section className="empty-state"><div className="empty-mark" aria-hidden="true">N</div><h2>{title}</h2><p>{text}</p><button className="primary-button" type="button">{action}</button></section>; }
 function Settings() {
