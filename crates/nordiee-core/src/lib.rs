@@ -71,6 +71,10 @@ impl GameId {
         }
         Ok(Self(value))
     }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -138,6 +142,77 @@ impl DownloadTask {
     }
 }
 
+/// In-memory queue policy for the first download engine iteration.
+/// Persisting task state and transferring bytes are deliberately separate concerns.
+#[derive(Debug, Default)]
+pub struct DownloadQueue {
+    tasks: Vec<DownloadTask>,
+}
+
+impl DownloadQueue {
+    pub fn queue(&mut self, game_id: GameId, total_bytes: u64) -> Result<(), &'static str> {
+        if self.tasks.iter().any(|task| task.game_id == game_id) {
+            return Err("a download for this game is already tracked");
+        }
+        self.tasks.push(DownloadTask::queue(game_id, total_bytes)?);
+        Ok(())
+    }
+
+    pub fn tasks(&self) -> &[DownloadTask] {
+        &self.tasks
+    }
+
+    pub fn start_next(&mut self) -> Result<Option<&DownloadTask>, &'static str> {
+        if self.tasks.iter().any(|task| task.state == InstallState::Downloading) {
+            return Err("an active download is already running");
+        }
+        let Some(next) = self.tasks.iter_mut().find(|task| task.state == InstallState::Queued) else {
+            return Ok(None);
+        };
+        next.start()?;
+        Ok(Some(next))
+    }
+
+    pub fn pause(&mut self, game_id: &str) -> Result<(), &'static str> {
+        self.find_mut(game_id)?.pause()
+    }
+
+    pub fn resume(&mut self, game_id: &str) -> Result<(), &'static str> {
+        if self.tasks.iter().any(|task| task.state == InstallState::Downloading) {
+            return Err("an active download is already running");
+        }
+        self.find_mut(game_id)?.start()
+    }
+
+    pub fn prioritize(&mut self, game_id: &str) -> Result<(), &'static str> {
+        let index = self.find_index(game_id)?;
+        if self.tasks[index].state != InstallState::Queued {
+            return Err("only queued downloads can be prioritized");
+        }
+        let task = self.tasks.remove(index);
+        let first_queued = self.tasks.iter().position(|candidate| candidate.state == InstallState::Queued).unwrap_or(self.tasks.len());
+        self.tasks.insert(first_queued, task);
+        Ok(())
+    }
+
+    pub fn cancel(&mut self, game_id: &str) -> Result<DownloadTask, &'static str> {
+        let index = self.find_index(game_id)?;
+        if self.tasks[index].state == InstallState::Installed {
+            return Err("installed games cannot be cancelled");
+        }
+        Ok(self.tasks.remove(index))
+    }
+
+    fn find_index(&self, game_id: &str) -> Result<usize, &'static str> {
+        self.tasks.iter().position(|task| task.game_id.as_str() == game_id).ok_or("download was not found")
+    }
+
+    fn find_mut(&mut self, game_id: &str) -> Result<&mut DownloadTask, &'static str> {
+        let index = self.find_index(game_id)?;
+        Ok(&mut self.tasks[index])
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -196,5 +271,29 @@ mod tests {
             files: vec![ManifestFile { path: "Game.exe".into(), size: 42, sha256: "not-a-hash".into() }],
         };
         assert_eq!(manifest.validate(), Err("manifest file hash must be a SHA-256 hex digest"));
+    }
+
+    #[test]
+    fn queue_pauses_resumes_and_prioritizes_downloads() {
+        let mut queue = DownloadQueue::default();
+        queue.queue(GameId::parse("first").unwrap(), 100).unwrap();
+        queue.queue(GameId::parse("second").unwrap(), 100).unwrap();
+        queue.prioritize("second").unwrap();
+        assert_eq!(queue.tasks()[0].game_id.as_str(), "second");
+
+        queue.start_next().unwrap();
+        assert_eq!(queue.tasks()[0].state, InstallState::Downloading);
+        queue.pause("second").unwrap();
+        assert_eq!(queue.tasks()[0].state, InstallState::Paused);
+        queue.resume("second").unwrap();
+        assert_eq!(queue.tasks()[0].state, InstallState::Downloading);
+        assert_eq!(queue.resume("first"), Err("an active download is already running"));
+    }
+
+    #[test]
+    fn queue_rejects_duplicate_game_downloads() {
+        let mut queue = DownloadQueue::default();
+        queue.queue(GameId::parse("first").unwrap(), 100).unwrap();
+        assert_eq!(queue.queue(GameId::parse("first").unwrap(), 100), Err("a download for this game is already tracked"));
     }
 }
