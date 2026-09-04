@@ -29,6 +29,10 @@ function configuredDownloadLimitMbps(): number | null {
   return [10, 25, 50, 100].includes(value) ? value : null;
 }
 
+function parseLaunchOptions(value: string): string[] {
+  return (value.match(/(?:[^\s"]+|"[^"]*")+/g) ?? []).map((part) => part.startsWith('"') && part.endsWith('"') ? part.slice(1, -1) : part);
+}
+
 const navigation: { label: View; icon: ReactNode }[] = [
   { label: "Home", icon: <HomeIcon /> },
   { label: "Library", icon: <LibraryIcon /> },
@@ -203,6 +207,11 @@ function Library({ accessToken, onDownload, runningGameIds }: { accessToken: str
   const [installingId, setInstallingId] = useState<string | null>(null);
   const [installedIds, setInstalledIds] = useState<string[]>([]);
   const [installedSizes, setInstalledSizes] = useState<Record<string, number>>({});
+  const [launchOptions, setLaunchOptions] = useState<Record<string, string>>(() => {
+    try { return JSON.parse(localStorage.getItem("nordiee.launchOptions") ?? "{}"); }
+    catch { return {}; }
+  });
+  const [editingLaunchOptions, setEditingLaunchOptions] = useState<string | null>(null);
   const [installError, setInstallError] = useState("");
   const [verification, setVerification] = useState<Record<string, VerificationState>>({});
   const [updateStatus, setUpdateStatus] = useState<Record<string, string>>({});
@@ -330,6 +339,11 @@ function Library({ accessToken, onDownload, runningGameIds }: { accessToken: str
       setInstallError(error instanceof Error ? error.message : "We could not open this game folder.");
     }
   };
+  const saveLaunchOptions = (gameId: string, value: string) => {
+    const next = { ...launchOptions, [gameId]: value.slice(0, 2048) };
+    setLaunchOptions(next);
+    localStorage.setItem("nordiee.launchOptions", JSON.stringify(next));
+  };
   const play = async (game: LibraryGame) => {
     setInstallError("");
     setInstallingId(game.id);
@@ -341,7 +355,7 @@ function Library({ accessToken, onDownload, runningGameIds }: { accessToken: str
       const manifest = await response.json();
       const updateResult = await invoke<{ version: string; changedFiles: number }>("update_game", { manifestJson: JSON.stringify(manifest), installRoot: await installRoot(), downloadLimitMbps: configuredDownloadLimitMbps() });
       if (updateResult.changedFiles) setUpdateStatus((current) => ({ ...current, [game.id]: `Updated to ${updateResult.version}` }));
-      await invoke("launch_game", { gameId: game.id, installRoot: await installRoot() });
+      await invoke("launch_game", { gameId: game.id, installRoot: await installRoot(), launchArguments: parseLaunchOptions(launchOptions[game.id] ?? "") });
     } catch (error) {
       setInstallError(error instanceof Error ? error.message : "We could not launch this game.");
     } finally {
@@ -387,7 +401,7 @@ function Library({ accessToken, onDownload, runningGameIds }: { accessToken: str
     const detail = isInstalling && percentage !== null ? `${percentage}% downloaded` : updateStatus[game.id] ?? (checkState === "verified" ? "All installed files verified." : checkState === "repair" ? "One or more files need repair." : displaySize ? `${isInstalled ? "Installed" : "Download"} · ${(displaySize / 1_000_000_000).toFixed(1)} GB` : "Size will be available soon");
     const primaryLabel = !isInstalled ? isInstalling ? percentage !== null ? `Downloading ${percentage}%` : "Preparing" : "Install" : checkState === "verifying" ? "Verifying" : checkState === "repair" ? isInstalling ? percentage !== null ? `Repairing ${percentage}%` : "Preparing repair" : "Repair files" : "Verify files";
     const primaryAction = () => { if (!isInstalled) return install(game); if (checkState === "repair") return repair(game); return verify(game); };
-    return <article className="library-card" key={game.id}><div className="library-cover" aria-hidden="true">N</div><div><p className="panel-label">{statusLabel}</p><h2>{game.title}</h2><p>{detail}</p><div className="library-actions">{isInstalled && <button className="library-action play-action" type="button" disabled={transferInProgress || isRunning || checkState === "repair"} onClick={() => void play(game)}>{isRunning ? "Running" : isInstalling ? percentage !== null ? `Updating ${percentage}%` : "Checking update" : "Play"}</button>}{isInstalled && <button className="library-action" type="button" disabled={transferInProgress || isRunning || checkState === "repair"} onClick={() => void update(game)}>Check update</button>}<button className="library-action" type="button" disabled={transferInProgress || isRunning || checkState === "verifying"} onClick={() => void primaryAction()}>{primaryLabel}</button>{isInstalled && <button className="library-action" type="button" disabled={transferInProgress} onClick={() => void openFolder(game)}>Open folder</button>}{isInstalled && <button className="library-action uninstall-action" type="button" disabled={transferInProgress || isRunning} onClick={() => void uninstall(game)}>Uninstall</button>}</div></div></article>;
+    return <article className="library-card" key={game.id}><div className="library-cover" aria-hidden="true">N</div><div><p className="panel-label">{statusLabel}</p><h2>{game.title}</h2><p>{detail}</p><div className="library-actions">{isInstalled && <button className="library-action play-action" type="button" disabled={transferInProgress || isRunning || checkState === "repair"} onClick={() => void play(game)}>{isRunning ? "Running" : isInstalling ? percentage !== null ? `Updating ${percentage}%` : "Checking update" : "Play"}</button>}{isInstalled && <button className="library-action" type="button" disabled={transferInProgress || isRunning || checkState === "repair"} onClick={() => void update(game)}>Check update</button>}<button className="library-action" type="button" disabled={transferInProgress || isRunning || checkState === "verifying"} onClick={() => void primaryAction()}>{primaryLabel}</button>{isInstalled && <button className="library-action" type="button" disabled={transferInProgress} onClick={() => void openFolder(game)}>Open folder</button>}{isInstalled && <button className="library-action" type="button" disabled={transferInProgress || isRunning} onClick={() => setEditingLaunchOptions(editingLaunchOptions === game.id ? null : game.id)}>Launch options</button>}{isInstalled && <button className="library-action uninstall-action" type="button" disabled={transferInProgress || isRunning} onClick={() => void uninstall(game)}>Uninstall</button>}</div>{editingLaunchOptions === game.id && <label className="launch-options"><span>Launch options</span><input value={launchOptions[game.id] ?? ""} onChange={(event) => saveLaunchOptions(game.id, event.target.value)} placeholder='Example: -windowed -log' spellCheck="false" /><small>Options are passed directly to this game only.</small></label>}</div></article>;
   })}</section></>;
 }
 function Downloads({ download, paused, onTogglePaused }: { download: DownloadActivity | null; paused: boolean; onTogglePaused: () => void }) {

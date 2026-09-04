@@ -386,7 +386,7 @@ async fn open_game_folder(game_id: String, install_root: String) -> Result<(), S
 }
 
 #[tauri::command]
-async fn launch_game(app: AppHandle, running_games: State<'_, RunningGames>, game_id: String, install_root: String) -> Result<(), String> {
+async fn launch_game(app: AppHandle, running_games: State<'_, RunningGames>, game_id: String, install_root: String, launch_arguments: Vec<String>) -> Result<(), String> {
     if !safe_game_id(&game_id) {
         return Err("The game identifier is invalid.".to_string());
     }
@@ -404,7 +404,10 @@ async fn launch_game(app: AppHandle, running_games: State<'_, RunningGames>, gam
     if running_games.0.lock().map_err(|_| "The game process tracker is unavailable.")?.contains(&game_id) {
         return Err("This game is already running.".to_string());
     }
-    let mut process = std::process::Command::new(executable).current_dir(game_directory).spawn().map_err(|error| error.to_string())?;
+    if launch_arguments.len() > 64 || launch_arguments.iter().any(|argument| argument.len() > 256) {
+        return Err("The launch options are too long.".to_string());
+    }
+    let mut process = std::process::Command::new(executable).args(launch_arguments).current_dir(game_directory).spawn().map_err(|error| error.to_string())?;
     running_games.0.lock().map_err(|_| "The game process tracker is unavailable.")?.insert(game_id.clone());
     let tracked_games = running_games.0.clone();
     let completed_game_id = game_id.clone();
