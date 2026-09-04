@@ -2,7 +2,7 @@ import { FormEvent, useCallback, useEffect, useRef, useState, type ReactNode } f
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { ArrowRightIcon, BellIcon, ChevronDownIcon, CloseIcon, DownloadIcon, HomeIcon, LibraryIcon, MaximizeIcon, MinimizeIcon, PauseIcon, PlayIcon, PlusIcon, SettingsIcon, TrashIcon } from "./Icons";
+import { AccountIcon, ArrowRightIcon, BellIcon, ChevronDownIcon, CloseIcon, DownloadIcon, HomeIcon, LibraryIcon, MaximizeIcon, MinimizeIcon, PauseIcon, PlayIcon, PlusIcon, SettingsIcon, TrashIcon } from "./Icons";
 import { activeAccountEmail, clearActiveAccount, getAccountSession, listSavedAccounts, migrateLegacyAccounts, removeSavedAccount, saveAccountSession, type AccountSecret, type SavedAccount } from "./accountStore";
 import { readLibraryCache, saveLibraryCache, type LibraryGame } from "./libraryCache";
 import { applyAvailableUpdate, checkForLauncherUpdate, type ManualUpdateState, type UpdateState } from "./updates";
@@ -12,7 +12,7 @@ import { clearRecentGames, readRecentGames, recordRecentGame, type RecentGame } 
 import { readLibraryFavorites, toggleLibraryFavorite } from "./libraryFavorites";
 import { addPlaytime, readPlaytime, type PlaytimeByGame } from "./playtimeStore";
 
-type View = "Home" | "Library" | "Downloads" | "Settings";
+type View = "Home" | "Library" | "Downloads" | "Friends" | "Settings";
 type AuthMode = "sign-in" | "sign-up";
 type Session = SavedAccount & AccountSecret;
 type AuthResponse = { accessToken: string; refreshToken: string; username: string; email: string };
@@ -27,6 +27,7 @@ type GameUpdateMode = "always" | "on-launch" | "never";
 type LibrarySort = "title" | "installed" | "favorites" | "recent" | "playtime";
 const API_BASE_URL = "https://api.nordiee.com/api/v1/auth";
 const LIBRARY_API_URL = "https://api.nordiee.com/api/v1/library";
+const FRIENDS_API_URL = "https://api.nordiee.com/api/v1/friends";
 const HEALTH_API_URL = "https://api.nordiee.com/health";
 
 async function installRoot() {
@@ -51,6 +52,7 @@ const navigation: { label: View; icon: ReactNode }[] = [
   { label: "Home", icon: <HomeIcon /> },
   { label: "Library", icon: <LibraryIcon /> },
   { label: "Downloads", icon: <DownloadIcon /> },
+  { label: "Friends", icon: <AccountIcon /> },
 ];
 
 function toSession(response: AuthResponse): Session {
@@ -337,6 +339,7 @@ function Launcher({ session, onSwitchAccount, onLogOff, onRemoveAccount }: { ses
   const savePauseDownloadsWhilePlaying = (enabled: boolean) => { setPauseDownloadsWhilePlaying(enabled); localStorage.setItem("nordiee.pauseDownloadsWhilePlaying", String(enabled)); };
   const saveLauncherNotificationsEnabled = (enabled: boolean) => { setLauncherNotificationsEnabled(enabled); localStorage.setItem("nordiee.launcherNotifications", String(enabled)); };
   const saveReduceMotion = (enabled: boolean) => { setReduceMotion(enabled); localStorage.setItem("nordiee.reduceMotion", String(enabled)); };
+  if (view === "Friends") return <Friends accessToken={session.accessToken} onBack={() => setView("Home")} />;
   return <div className="launcher-shell"><a className="skip-link" href="#main-content">Skip to content</a><aside className="sidebar" aria-label="Launcher navigation"><div className="sidebar-brand"><img src="/logo.svg" alt="Nordiee" /><span>NORDIEE</span></div><nav className="navigation">{navigation.map((item) => <button className={view === item.label ? "nav-item active" : "nav-item"} key={item.label} onClick={() => setView(item.label)} type="button"><span className="nav-icon">{item.icon}</span>{item.label}</button>)}</nav><div className="sidebar-bottom"><button className={view === "Settings" ? "nav-item active" : "nav-item"} onClick={() => setView("Settings")} type="button"><span className="nav-icon"><SettingsIcon /></span>Settings</button><div className="account-menu"><button className="profile" type="button" aria-expanded={accountOpen} aria-haspopup="menu" onClick={() => setAccountOpen(!accountOpen)}><span className="avatar">{session.displayName[0]?.toUpperCase()}</span><span><strong>{session.displayName}</strong><small>{session.email}</small></span><ChevronDownIcon size={15} /></button>{accountOpen && <div className="account-popover" role="menu"><button type="button" role="menuitem" onClick={onSwitchAccount}>Switch account</button><button type="button" role="menuitem" onClick={() => void onLogOff()}>Log off</button><button className="danger-action" type="button" role="menuitem" onClick={() => void remove()}>Remove this account</button></div>}</div></div></aside><main id="main-content" className="content" tabIndex={-1}><header className="topbar"><div><p className="eyebrow">NORDIEE LAUNCHER</p><h1>{view}</h1></div><div className="topbar-actions"><div className={`service-status ${serviceStatus}`} role="status"><span /> {serviceLabel}</div><NotificationCenter notifications={notifications} open={notificationsOpen} unreadCount={unreadCount} onToggle={() => { const next = !notificationsOpen; setNotificationsOpen(next); if (next) markNotificationsRead(); }} onClear={clearNotifications} /></div></header>{view === "Home" && <Home download={download} onClearRecent={() => setRecentGames(clearRecentGames(session.email))} playtimeByGame={playtimeByGame} queuedTransfers={queuedTransfers} recentGames={recentGames} onOpenLibrary={() => setView("Library")} onOpenDownloads={() => setView("Downloads")} />}{view === "Library" && <Library accessToken={session.accessToken} favoriteGameIds={favoriteGameIds} recentGames={recentGames} searchRequest={librarySearchRequest} playtimeByGame={playtimeByGame} onDownload={setDownload} onNotify={addNotification} onFavoriteToggle={(gameId) => setFavoriteGameIds(toggleLibraryFavorite(session.email, gameId))} onGameLaunched={(game) => setRecentGames(recordRecentGame(session.email, game))} runningGameIds={runningGameIds} />}{view === "Downloads" && <Downloads download={download} queuedTransfers={queuedTransfers} paused={downloadsPaused} onTogglePaused={() => void toggleDownloadsPaused()} />}{view === "Settings" && <Settings launcherNotificationsEnabled={launcherNotificationsEnabled} manualUpdateState={manualUpdateState} onLauncherNotificationsEnabledChange={saveLauncherNotificationsEnabled} onManualUpdateCheck={() => void checkForLauncherUpdate(setManualUpdateState)} onReduceMotionChange={saveReduceMotion} pauseDownloadsWhilePlaying={pauseDownloadsWhilePlaying} reduceMotion={reduceMotion} onPauseDownloadsWhilePlayingChange={savePauseDownloadsWhilePlaying} />}</main></div>;
 }
 
@@ -356,6 +359,61 @@ function Home({ download, onClearRecent, playtimeByGame, queuedTransfers, recent
   const recentPlaytime = recentGame ? playtimeByGame[recentGame.id] ?? 0 : 0;
   const playtimeLabel = recentPlaytime ? recentPlaytime >= 3600 ? `${Math.floor(recentPlaytime / 3600)}h ${Math.floor((recentPlaytime % 3600) / 60)}m played` : `${Math.floor(recentPlaytime / 60)}m played` : "";
   return <section className="home-grid" aria-label="Launcher overview"><article className="welcome-card"><p className="eyebrow">{recentGame ? "CONTINUE PLAYING" : "NORDIEE LAUNCHER"}</p><h2>{recentGame ? recentGame.title : "Your games, one place."}</h2><p>{recentGame ? `Last played ${lastPlayed}.${playtimeLabel ? ` ${playtimeLabel}.` : ""}` : "Library, updates and verified installs are ready from one focused workspace."}</p><button className="primary-button" type="button" onClick={onOpenLibrary}>{recentGame ? "Continue in library" : "View your library"}</button></article><article className="panel home-download"><p className="panel-label">DOWNLOADS</p>{download ? <><div className="home-download-heading"><h3>{download.title}</h3><strong>{percentage === null ? "Starting" : `${percentage}%`}</strong></div><div className="download-progress" role="progressbar" aria-label={`${download.title} download progress`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={percentage ?? undefined}><span style={{ width: `${percentage ?? 4}%` }} /></div><button className="text-button" type="button" onClick={onOpenDownloads}>Open Downloads</button></> : queuedTransfers.length ? <><h3>{queuedTransfers.length} {queuedTransfers.length === 1 ? "game waiting" : "games waiting"}</h3><p>{queuedTransfers[0].game.title} is next in the transfer queue.</p><button className="text-button" type="button" onClick={onOpenDownloads}>Manage queue</button></> : <><h3>Nothing in queue</h3><p>Game installs, updates and repairs will appear here.</p></>}</article><article className="panel full-width"><div className="panel-heading"><div><p className="panel-label">RECENT GAMES</p><h3>{recentGames.length ? "Your latest launches" : "Ready when you are"}</h3></div><span>{recentGames.length ? <button className="text-button" type="button" onClick={onClearRecent}>Clear recent</button> : null}<button className="text-button" type="button" onClick={onOpenLibrary}>Open Library</button></span></div><p>{recentGames.length ? recentGames.slice(0, 3).map((game) => game.title).join(" • ") : "Installed games stay updated and can be verified or repaired from your library."}</p></article></section>;
+}
+
+type FriendProfile = { id: string; username: string };
+type IncomingFriendRequest = { id: string; from: FriendProfile; createdAt: string };
+
+function Friends({ accessToken, onBack }: { accessToken: string; onBack: () => void }) {
+  const [friends, setFriends] = useState<FriendProfile[]>([]);
+  const [incoming, setIncoming] = useState<IncomingFriendRequest[]>([]);
+  const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
+  const [username, setUsername] = useState("");
+  const [message, setMessage] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const load = useCallback(async () => {
+    setStatus("loading");
+    try {
+      const headers = { Authorization: `Bearer ${accessToken}` };
+      const [friendsResponse, requestsResponse] = await Promise.all([fetch(FRIENDS_API_URL, { headers }), fetch(`${FRIENDS_API_URL}/requests`, { headers })]);
+      if (!friendsResponse.ok || !requestsResponse.ok) throw new Error("Friends request failed");
+      setFriends(await friendsResponse.json() as FriendProfile[]);
+      setIncoming(await requestsResponse.json() as IncomingFriendRequest[]);
+      setStatus("ready");
+    } catch {
+      setStatus("error");
+    }
+  }, [accessToken]);
+  useEffect(() => { void load(); }, [load]);
+  const sendRequest = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!username.trim()) return;
+    setSubmitting(true);
+    setMessage("");
+    try {
+      const response = await fetch(`${FRIENDS_API_URL}/requests`, { method: "POST", headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" }, body: JSON.stringify({ username: username.trim() }) });
+      if (!response.ok) { const body = await response.json().catch(() => null) as { error?: string } | null; throw new Error(body?.error ?? "Could not send that friend request."); }
+      setUsername("");
+      setMessage("Friend request sent.");
+    } catch (error) { setMessage(error instanceof Error ? error.message : "Could not send that friend request."); }
+    finally { setSubmitting(false); }
+  };
+  const accept = async (requestId: string) => {
+    try {
+      const response = await fetch(`${FRIENDS_API_URL}/requests/${requestId}/accept`, { method: "POST", headers: { Authorization: `Bearer ${accessToken}` } });
+      if (!response.ok) throw new Error();
+      setMessage("Friend request accepted.");
+      await load();
+    } catch { setMessage("Could not accept that request. Try again."); }
+  };
+  const decline = async (requestId: string) => {
+    try {
+      const response = await fetch(`${FRIENDS_API_URL}/requests/${requestId}`, { method: "DELETE", headers: { Authorization: `Bearer ${accessToken}` } });
+      if (!response.ok) throw new Error();
+      setIncoming((current) => current.filter((request) => request.id !== requestId));
+    } catch { setMessage("Could not decline that request. Try again."); }
+  };
+  return <main className="friends-page"><header className="friends-header"><div><p className="eyebrow">SOCIAL</p><h1>Friends</h1><p>Keep your Nordiee people in one place.</p></div><button className="text-button" type="button" onClick={onBack}>Back to Home</button></header><section className="friends-grid"><article className="panel add-friend-card"><p className="panel-label">ADD FRIEND</p><h2>Find a player</h2><form onSubmit={(event) => void sendRequest(event)}><label>Nordiee username<input value={username} onChange={(event) => setUsername(event.target.value)} placeholder="Username" minLength={3} maxLength={24} required autoComplete="off" /></label><button className="primary-button" type="submit" disabled={submitting}>{submitting ? "Sending" : "Send request"}</button></form>{message && <p className={message.endsWith("sent.") || message.endsWith("accepted.") ? "friends-message success" : "friends-message"} role="status">{message}</p>}</article><article className="panel"><div className="panel-heading"><div><p className="panel-label">REQUESTS</p><h2>Incoming</h2></div><span className="count">{incoming.length}</span></div>{status === "loading" ? <p>Loading friend requests...</p> : incoming.length ? <ul className="friends-list">{incoming.map((request) => <li key={request.id}><span className="friend-avatar">{request.from.username[0]?.toUpperCase()}</span><strong>{request.from.username}</strong><div><button className="select-button" type="button" onClick={() => void accept(request.id)}>Accept</button><button className="text-button" type="button" onClick={() => void decline(request.id)}>Decline</button></div></li>)}</ul> : <p>No pending requests.</p>}</article><article className="panel friends-list-card"><div className="panel-heading"><div><p className="panel-label">YOUR FRIENDS</p><h2>{friends.length ? `${friends.length} connected` : "No friends yet"}</h2></div></div>{status === "error" ? <><p>We could not load Friends. Check your connection, then try again.</p><button className="text-button" type="button" onClick={() => void load()}>Try again</button></> : status === "loading" ? <p>Loading friends...</p> : friends.length ? <ul className="friends-list">{friends.map((friend) => <li key={friend.id}><span className="friend-avatar">{friend.username[0]?.toUpperCase()}</span><strong>{friend.username}</strong><small>Online status will appear here when presence is ready.</small></li>)}</ul> : <p>Send a request by Nordiee username to start your list.</p>}</article></section></main>;
 }
 function Library({ accessToken, favoriteGameIds, recentGames, searchRequest, playtimeByGame, onDownload, onNotify, onFavoriteToggle, onGameLaunched, runningGameIds }: { accessToken: string; favoriteGameIds: string[]; recentGames: RecentGame[]; searchRequest: number; playtimeByGame: PlaytimeByGame; onDownload: (download: DownloadActivity | null) => void; onNotify: (title: string, message: string, kind?: NotificationKind) => void; onFavoriteToggle: (gameId: string) => void; onGameLaunched: (game: Omit<RecentGame, "lastPlayedAt">) => void; runningGameIds: string[] }) {
   const email = activeAccountEmail() ?? "";
