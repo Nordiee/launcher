@@ -13,20 +13,16 @@ This is a release requirement, not an optional feature.
 
 ## Technical implementation
 
-- Tauri updater plugin is included in the native app.
+- Tauri updater checks before the account screen. When a newer signed package exists, it downloads and installs before launcher access is allowed.
 - Windows uses the passive installer mode so the update shows a small progress window without manual setup steps.
 - Every release artifact is signed with the Nordiee private updater key. The public key is embedded in `tauri.conf.json`.
-- The update feed will be served from an HTTPS release endpoint, initially `https://github.com/Nordiee/launcher/releases/latest/download/latest.json` or a Nordiee-owned release domain.
+- The update feed is served from `https://github.com/Nordiee/launcher/releases/latest/download/latest.json`.
 - The private signing key must be stored only in GitHub Actions secrets. It must never be committed to this repository or sent to the launcher.
 - Release CI publishes the NSIS updater artifact, its `.sig` signature and `latest.json` together.
 
 ## Before first public release
 
-1. Generate an updater signing key.
-2. Add its public key and update endpoint to the Tauri config.
-3. Add the private key and password to GitHub Actions secrets.
-4. Enable `createUpdaterArtifacts` in the Tauri bundle configuration.
-5. Build a signed test update from `0.1.0` to `0.1.1` and verify it installs on a clean Windows machine.
+1. Build a signed test update from `0.1.0` to `0.1.1` and verify it installs on a clean Windows machine.
 
 ## Account gate
 

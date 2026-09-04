@@ -1,6 +1,7 @@
-import { FormEvent, useState, type ReactNode } from "react";
+import { FormEvent, useEffect, useState, type ReactNode } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ChevronDownIcon, CloseIcon, DownloadIcon, HomeIcon, LibraryIcon, MaximizeIcon, MinimizeIcon, SettingsIcon } from "./Icons";
+import { applyAvailableUpdate, type UpdateState } from "./updates";
 
 type View = "Home" | "Library" | "Downloads" | "Settings";
 type AuthMode = "sign-in" | "sign-up";
@@ -14,8 +15,12 @@ const navigation: { label: View; icon: ReactNode }[] = [
 
 export default function App() {
   const [session, setSession] = useState<Session | null>(null);
-  return <div className="app-window"><Titlebar />{session ? <Launcher session={session} onLogOff={() => setSession(null)} /> : <AuthScreen />}</div>;
+  const [updateState, setUpdateState] = useState<UpdateState>("checking");
+  useEffect(() => { void applyAvailableUpdate(setUpdateState); }, []);
+  return <div className="app-window"><Titlebar />{updateState !== "ready" ? <UpdateGate state={updateState} /> : session ? <Launcher session={session} onLogOff={() => setSession(null)} /> : <AuthScreen />}</div>;
 }
+
+function UpdateGate({ state }: { state: UpdateState }) { return <main className="update-gate"><img src="/logo.svg" alt="Nordiee" /><div className="update-spinner" aria-hidden="true" /><h1>{state === "checking" ? "Checking for updates" : "Updating Nordiee"}</h1><p>{state === "checking" ? "Making sure you are on the latest version." : "Installing the latest version. Nordiee will reopen automatically."}</p></main>; }
 
 function Titlebar() {
   const appWindow = getCurrentWindow();
