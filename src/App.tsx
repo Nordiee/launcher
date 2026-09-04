@@ -23,6 +23,7 @@ type NotificationKind = LauncherNotification["kind"];
 type ServiceStatus = "checking" | "operational" | "unavailable";
 type LibraryFilter = "all" | "installed" | "not-installed" | "favorites";
 type GameUpdateMode = "always" | "on-launch" | "never";
+type LibrarySort = "title" | "installed" | "favorites";
 const API_BASE_URL = "https://api.nordiee.com/api/v1/auth";
 const LIBRARY_API_URL = "https://api.nordiee.com/api/v1/library";
 const HEALTH_API_URL = "https://api.nordiee.com/health";
@@ -308,6 +309,7 @@ function Library({ accessToken, favoriteGameIds, onDownload, onNotify, onFavorit
   const [games, setGames] = useState<LibraryGame[]>([]);
   const [libraryFilter, setLibraryFilter] = useState<LibraryFilter>("all");
   const [libraryQuery, setLibraryQuery] = useState("");
+  const [librarySort, setLibrarySort] = useState<LibrarySort>("title");
   const [installingId, setInstallingId] = useState<string | null>(null);
   const [installedIds, setInstalledIds] = useState<string[]>([]);
   const [installedSizes, setInstalledSizes] = useState<Record<string, number>>({});
@@ -576,8 +578,18 @@ function Library({ accessToken, favoriteGameIds, onDownload, onNotify, onFavorit
     if (libraryFilter === "not-installed" && isInstalled) return false;
     if (libraryFilter === "favorites" && !favoriteGameIds.includes(game.id)) return false;
     return !normalizedQuery || game.title.toLocaleLowerCase().includes(normalizedQuery);
+  }).sort((left, right) => {
+    if (librarySort === "favorites") {
+      const favoriteDifference = Number(favoriteGameIds.includes(right.id)) - Number(favoriteGameIds.includes(left.id));
+      if (favoriteDifference) return favoriteDifference;
+    }
+    if (librarySort === "installed") {
+      const installedDifference = Number(installedIds.includes(right.id) || right.installState === "INSTALLED") - Number(installedIds.includes(left.id) || left.installState === "INSTALLED");
+      if (installedDifference) return installedDifference;
+    }
+    return left.title.localeCompare(right.title);
   });
-  return <>{offlineNotice}{queueNotice}{installError && <p className="install-error" role="alert">{installError}</p>}<section className="library-toolbar" aria-label="Library filters"><label><span className="sr-only">Search your library</span><input value={libraryQuery} onChange={(event) => setLibraryQuery(event.target.value)} placeholder="Search your library" type="search" /></label><div role="group" aria-label="Game filter">{(["all", "installed", "not-installed", "favorites"] as const).map((filter) => <button className={libraryFilter === filter ? "active" : ""} key={filter} type="button" onClick={() => setLibraryFilter(filter)}>{filter === "all" ? "All games" : filter === "installed" ? "Installed" : filter === "not-installed" ? "Not installed" : "Favorites"}</button>)}</div></section>{visibleGames.length ? <section className="library-grid" aria-label="Your game library">{visibleGames.map((game) => {
+  return <>{offlineNotice}{queueNotice}{installError && <p className="install-error" role="alert">{installError}</p>}<section className="library-toolbar" aria-label="Library filters"><label><span className="sr-only">Search your library</span><input value={libraryQuery} onChange={(event) => setLibraryQuery(event.target.value)} placeholder="Search your library" type="search" /></label><div role="group" aria-label="Game filter">{(["all", "installed", "not-installed", "favorites"] as const).map((filter) => <button className={libraryFilter === filter ? "active" : ""} key={filter} type="button" onClick={() => setLibraryFilter(filter)}>{filter === "all" ? "All games" : filter === "installed" ? "Installed" : filter === "not-installed" ? "Not installed" : "Favorites"}</button>)}</div><label className="library-sort"><span className="sr-only">Sort library</span><select className="select-button" value={librarySort} onChange={(event) => setLibrarySort(event.target.value as LibrarySort)}><option value="title">A to Z</option><option value="installed">Installed first</option><option value="favorites">Favorites first</option></select></label></section>{visibleGames.length ? <section className="library-grid" aria-label="Your game library">{visibleGames.map((game) => {
     const isInstalling = installingId === game.id;
     const isQueued = queuedTransfers.some((transfer) => transfer.game.id === game.id);
     const transferInProgress = installingId !== null;
