@@ -1,15 +1,17 @@
 import { FormEvent, useEffect, useState, type ReactNode } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { ChevronDownIcon, CloseIcon, DownloadIcon, HomeIcon, LibraryIcon, MaximizeIcon, MinimizeIcon, SettingsIcon } from "./Icons";
+import { ArrowRightIcon, ChevronDownIcon, CloseIcon, DownloadIcon, HomeIcon, LibraryIcon, MaximizeIcon, MinimizeIcon, PlusIcon, SettingsIcon, TrashIcon } from "./Icons";
 import { applyAvailableUpdate, type UpdateState } from "./updates";
 
 type View = "Home" | "Library" | "Downloads" | "Settings";
 type AuthMode = "sign-in" | "sign-up";
 type Session = { displayName: string; email: string; accessToken: string; refreshToken: string };
 type AuthResponse = { accessToken: string; refreshToken: string; username: string; email: string };
+type AccessView = "accounts" | "credentials";
 
 const API_BASE_URL = "https://api.nordiee.com/api/v1/auth";
 const SESSION_STORAGE_KEY = "nordiee.account-session.v1";
+const ACCOUNTS_STORAGE_KEY = "nordiee.accounts.v1";
 
 const navigation: { label: View; icon: ReactNode }[] = [
   { label: "Home", icon: <HomeIcon /> },
@@ -33,13 +35,38 @@ function readStoredSession(): Session | null {
   }
 }
 
-function persistSession(session: Session) { localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session)); }
-function clearStoredSession() { localStorage.removeItem(SESSION_STORAGE_KEY); }
+function readStoredAccounts(): Session[] {
+  try {
+    const rawAccounts = localStorage.getItem(ACCOUNTS_STORAGE_KEY);
+    const accounts = rawAccounts ? JSON.parse(rawAccounts) : [readStoredSession()].filter(Boolean);
+    if (!Array.isArray(accounts)) return [];
+    return accounts.filter((account): account is Session => Boolean(account?.displayName && account?.email && account?.accessToken && account?.refreshToken));
+  } catch {
+    return [];
+  }
+}
+
+function persistSession(session: Session) {
+  const accounts = readStoredAccounts().filter((account) => account.email.toLowerCase() !== session.email.toLowerCase());
+  localStorage.setItem(ACCOUNTS_STORAGE_KEY, JSON.stringify([session, ...accounts]));
+  localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session));
+}
+
+function clearActiveSession() { localStorage.removeItem(SESSION_STORAGE_KEY); }
+
+function removeStoredAccount(email: string) {
+  localStorage.setItem(ACCOUNTS_STORAGE_KEY, JSON.stringify(readStoredAccounts().filter((account) => account.email.toLowerCase() !== email.toLowerCase())));
+  const active = readStoredSession();
+  if (active?.email.toLowerCase() === email.toLowerCase()) clearActiveSession();
+}
 
 export default function App() {
   const [session, setSession] = useState<Session | null>(null);
+  const [accounts, setAccounts] = useState<Session[]>(readStoredAccounts);
   const [updateState, setUpdateState] = useState<UpdateState>("checking");
   const [sessionReady, setSessionReady] = useState(false);
+  const [accessView, setAccessView] = useState<AccessView>(accounts.length ? "accounts" : "credentials");
+  const [prefilledEmail, setPrefilledEmail] = useState("");
   useEffect(() => { void applyAvailableUpdate(setUpdateState); }, []);
   useEffect(() => {
     const restoreSession = async () => {
@@ -51,28 +78,40 @@ export default function App() {
         if (!response.ok) throw new Error(body.error ?? "Session expired");
         const nextSession = toSession(body);
         persistSession(nextSession);
+        setAccounts(readStoredAccounts());
         setSession(nextSession);
       } catch {
-        clearStoredSession();
+        clearActiveSession();
       } finally {
         setSessionReady(true);
       }
     };
     void restoreSession();
   }, []);
-  const signOut = async () => {
-    const currentSession = session;
-    clearStoredSession();
-    setSession(null);
-    if (!currentSession) return;
+  const endRemoteSession = async (currentSession: Session) => {
     void fetch(`${API_BASE_URL}/logout`, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${currentSession.accessToken}` }, body: JSON.stringify({ refreshToken: currentSession.refreshToken }) });
   };
-  const startSession = (nextSession: Session) => { persistSession(nextSession); setSession(nextSession); };
-  return <div className="app-window"><Titlebar />{updateState !== "ready" ? <UpdateGate state={updateState} /> : !sessionReady ? <StartupGate /> : session ? <Launcher session={session} onLogOff={signOut} /> : <AuthScreen onSession={startSession} />}</div>;
+  const logOff = async () => {
+    const currentSession = session;
+    clearActiveSession();
+    setSession(null);
+    setAccessView("accounts");
+    if (currentSession) await endRemoteSession(currentSession);
+  };
+  const switchAccount = () => { clearActiveSession(); setSession(null); setAccessView("accounts"); };
+  const removeAccount = async (account: Session) => { removeStoredAccount(account.email); const remaining = readStoredAccounts(); setAccounts(remaining); if (session?.email === account.email) setSession(null); await endRemoteSession(account); setAccessView(remaining.length ? "accounts" : "credentials"); };
+  const startSession = (nextSession: Session) => { persistSession(nextSession); setAccounts(readStoredAccounts()); setSession(nextSession); };
+  const selectAccount = async (account: Session) => {
+    const response = await fetch(`${API_BASE_URL}/refresh`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ refreshToken: account.refreshToken }) });
+    const body = await response.json() as AuthResponse & { error?: string };
+    if (!response.ok) { clearActiveSession(); setPrefilledEmail(account.email); setAccessView("credentials"); return; }
+    startSession(toSession(body));
+  };
+  return <div className="app-window"><Titlebar />{updateState !== "ready" ? <UpdateGate state={updateState} /> : !sessionReady ? <StartupGate /> : session ? <Launcher session={session} onSwitchAccount={switchAccount} onLogOff={logOff} onRemoveAccount={removeAccount} /> : accessView === "accounts" && accounts.length ? <AccountPicker accounts={accounts} onSelect={selectAccount} onAdd={() => setAccessView("credentials")} onRemove={removeAccount} /> : <AuthScreen initialEmail={prefilledEmail} onBack={accounts.length ? () => setAccessView("accounts") : undefined} onSession={startSession} />}</div>;
 }
 
-function UpdateGate({ state }: { state: UpdateState }) { return <main className="update-gate"><img src="/logo.svg" alt="Nordiee" /><div className="update-spinner" aria-hidden="true" /><h1>{state === "checking" ? "Checking for updates" : "Updating Nordiee"}</h1><p>{state === "checking" ? "Making sure you are on the latest version." : "Installing the latest version. Nordiee will reopen automatically."}</p></main>; }
-function StartupGate() { return <main className="update-gate"><img src="/logo.svg" alt="Nordiee" /><div className="update-spinner" aria-hidden="true" /><h1>Restoring your session</h1><p>Checking your Nordiee account securely.</p></main>; }
+function UpdateGate({ state }: { state: UpdateState }) { return <StartupScreen label={state === "checking" ? "STARTUP CHECK" : "UPDATE READY"} title={state === "checking" ? "Preparing Nordiee" : "Installing the latest build"} text={state === "checking" ? "Checking your launcher version before we let you in." : "Your update is being verified and installed. Nordiee will reopen automatically."} activeStep={state === "checking" ? 1 : 2} />; }
+function StartupGate() { return <StartupScreen label="ACCOUNT SESSION" title="Restoring your session" text="Verifying your saved Nordiee account." activeStep={2} />; }
 
 function Titlebar() {
   const appWindow = getCurrentWindow();
@@ -86,7 +125,19 @@ function Titlebar() {
   </header>;
 }
 
-function AuthScreen({ onSession }: { onSession: (session: Session) => void }) {
+function StartupScreen({ label, title, text, activeStep }: { label: string; title: string; text: string; activeStep: 1 | 2 }) {
+  return <main className="startup-shell"><section className="startup-card" aria-live="polite"><div className="startup-brand"><img src="/logo.svg" alt="Nordiee" /><span>NORDIEE</span></div><div className="startup-orbit" aria-hidden="true"><span /><span /><i /></div><p className="eyebrow">{label}</p><h1>{title}</h1><p className="startup-copy">{text}</p><div className="startup-steps"><div className={activeStep >= 1 ? "complete" : ""}><span>01</span><p>Check build</p></div><div className={activeStep >= 2 ? "complete" : ""}><span>02</span><p>Open launcher</p></div></div></section><p className="startup-footer">NORDIEE LAUNCHER <span>•</span> SYSTEM READY</p></main>;
+}
+
+function AccountPicker({ accounts, onSelect, onAdd, onRemove }: { accounts: Session[]; onSelect: (account: Session) => Promise<void>; onAdd: () => void; onRemove: (account: Session) => Promise<void> }) {
+  const [busyEmail, setBusyEmail] = useState<string | null>(null);
+  const [message, setMessage] = useState("");
+  const choose = async (account: Session) => { setMessage(""); setBusyEmail(account.email); try { await onSelect(account); } catch { setMessage("We could not reach Nordiee accounts. Check your connection and try again."); } finally { setBusyEmail(null); } };
+  const remove = async (account: Session) => { if (!window.confirm(`Remove ${account.displayName} from this computer?`)) return; setBusyEmail(account.email); try { await onRemove(account); } finally { setBusyEmail(null); } };
+  return <main className="account-picker"><section className="account-picker-card" aria-labelledby="choose-account-title"><div className="picker-heading"><img src="/logo.svg" alt="Nordiee" /><div><p className="eyebrow">NORDIEE LAUNCHER</p><h1 id="choose-account-title">Choose an account</h1><p>Accounts signed in on this computer.</p></div></div><div className="saved-accounts" role="list">{accounts.map((account) => <article className="saved-account" key={account.email} role="listitem"><button className="saved-account-main" type="button" disabled={busyEmail !== null} onClick={() => void choose(account)}><span className="account-avatar">{account.displayName[0]?.toUpperCase()}</span><span><strong>{account.displayName}</strong><small>{account.email}</small></span><ArrowRightIcon /></button><button className="remove-account" type="button" disabled={busyEmail !== null} aria-label={`Remove ${account.displayName} from this computer`} onClick={() => void remove(account)}><TrashIcon /></button>{busyEmail === account.email && <span className="account-working">Connecting</span>}</article>)}</div>{message && <p className="picker-message" role="alert">{message}</p>}<button className="add-account" type="button" onClick={onAdd}><PlusIcon />Sign in with another account</button></section></main>;
+}
+
+function AuthScreen({ initialEmail, onBack, onSession }: { initialEmail: string; onBack?: () => void; onSession: (session: Session) => void }) {
   const [mode, setMode] = useState<AuthMode>("sign-in");
   const [message, setMessage] = useState("");
   const changeMode = (next: AuthMode) => { setMode(next); setMessage(""); };
@@ -106,17 +157,18 @@ function AuthScreen({ onSession }: { onSession: (session: Session) => void }) {
     <section className="auth-panel" aria-labelledby="auth-heading">
       <div className="auth-tabs" role="tablist" aria-label="Account access"><button className={mode === "sign-in" ? "active" : ""} type="button" role="tab" aria-selected={mode === "sign-in"} onClick={() => changeMode("sign-in")}>Sign in</button><button className={mode === "sign-up" ? "active" : ""} type="button" role="tab" aria-selected={mode === "sign-up"} onClick={() => changeMode("sign-up")}>Create account</button></div>
       <div className="auth-form-wrap"><p className="eyebrow">{mode === "sign-in" ? "WELCOME BACK" : "JOIN NORDIEE"}</p><h2 id="auth-heading">{mode === "sign-in" ? "Sign in to Nordiee" : "Create your account"}</h2><p className="auth-copy">{mode === "sign-in" ? "Use your Nordiee account to continue." : "Your library will be ready when you are."}</p>
-        <form onSubmit={submit}>{mode === "sign-up" && <label>Display name<input name="display-name" autoComplete="nickname" required minLength={3} placeholder="Your Nordiee name" /></label>}<label>Email<input name="email" type="email" autoComplete="email" required placeholder="you@example.com" /></label><label>Password<input name="password" type="password" autoComplete={mode === "sign-in" ? "current-password" : "new-password"} required minLength={8} placeholder="At least 8 characters" /></label>{message && <p className="auth-message" role="status">{message}</p>}<button className="primary-button auth-submit" type="submit">{mode === "sign-in" ? "Sign in" : "Create account"}</button></form>
-        <p className="auth-switch">{mode === "sign-in" ? "New to Nordiee?" : "Already have an account?"} <button type="button" onClick={() => changeMode(mode === "sign-in" ? "sign-up" : "sign-in")}>{mode === "sign-in" ? "Create one" : "Sign in"}</button></p>
+        <form onSubmit={submit}>{mode === "sign-up" && <label>Display name<input name="display-name" autoComplete="nickname" required minLength={3} placeholder="Your Nordiee name" /></label>}<label>Email<input name="email" type="email" autoComplete="email" required defaultValue={initialEmail} placeholder="you@example.com" /></label><label>Password<input name="password" type="password" autoComplete={mode === "sign-in" ? "current-password" : "new-password"} required minLength={8} placeholder="At least 8 characters" /></label>{message && <p className="auth-message" role="status">{message}</p>}<button className="primary-button auth-submit" type="submit">{mode === "sign-in" ? "Sign in" : "Create account"}</button></form>
+        <p className="auth-switch">{mode === "sign-in" ? "New to Nordiee?" : "Already have an account?"} <button type="button" onClick={() => changeMode(mode === "sign-in" ? "sign-up" : "sign-in")}>{mode === "sign-in" ? "Create one" : "Sign in"}</button>{onBack && <><span> · </span><button type="button" onClick={onBack}>Back to accounts</button></>}</p>
       </div>
     </section>
   </main>;
 }
 
-function Launcher({ session, onLogOff }: { session: Session; onLogOff: () => void }) {
+function Launcher({ session, onSwitchAccount, onLogOff, onRemoveAccount }: { session: Session; onSwitchAccount: () => void; onLogOff: () => void; onRemoveAccount: (account: Session) => Promise<void> }) {
   const [view, setView] = useState<View>("Home");
   const [accountOpen, setAccountOpen] = useState(false);
-  return <div className="launcher-shell"><a className="skip-link" href="#main-content">Skip to content</a><aside className="sidebar" aria-label="Launcher navigation"><div className="sidebar-brand"><img src="/logo.svg" alt="Nordiee" /><span>NORDIEE</span></div><nav className="navigation">{navigation.map((item) => <button className={view === item.label ? "nav-item active" : "nav-item"} key={item.label} onClick={() => setView(item.label)} type="button"><span className="nav-icon">{item.icon}</span>{item.label}</button>)}</nav><div className="sidebar-bottom"><button className={view === "Settings" ? "nav-item active" : "nav-item"} onClick={() => setView("Settings")} type="button"><span className="nav-icon"><SettingsIcon /></span>Settings</button><div className="account-menu"><button className="profile" type="button" aria-expanded={accountOpen} aria-haspopup="menu" onClick={() => setAccountOpen(!accountOpen)}><span className="avatar">{session.displayName[0]?.toUpperCase()}</span><span><strong>{session.displayName}</strong><small>{session.email}</small></span><ChevronDownIcon size={15} /></button>{accountOpen && <div className="account-popover" role="menu"><button type="button" role="menuitem" onClick={onLogOff}>Switch account</button><button type="button" role="menuitem" onClick={onLogOff}>Log off</button><button className="danger-action" type="button" role="menuitem" onClick={onLogOff}>Remove this account</button></div>}</div></div></aside><main id="main-content" className="content" tabIndex={-1}><header className="topbar"><div><p className="eyebrow">NORDIEE LAUNCHER</p><h1>{view}</h1></div><div className="service-status"><span /> All systems operational</div></header>{view === "Home" && <Home />}{view === "Library" && <EmptyState title="Your library is ready" text="Games you own and their installation state will be shown here." action="Browse library" />}{view === "Downloads" && <EmptyState title="No active downloads" text="Game installs, updates and repairs will appear here." action="Browse library" />}{view === "Settings" && <Settings />}</main></div>;
+  const remove = async () => { if (!window.confirm(`Remove ${session.displayName} from this computer?`)) return; await onRemoveAccount(session); };
+  return <div className="launcher-shell"><a className="skip-link" href="#main-content">Skip to content</a><aside className="sidebar" aria-label="Launcher navigation"><div className="sidebar-brand"><img src="/logo.svg" alt="Nordiee" /><span>NORDIEE</span></div><nav className="navigation">{navigation.map((item) => <button className={view === item.label ? "nav-item active" : "nav-item"} key={item.label} onClick={() => setView(item.label)} type="button"><span className="nav-icon">{item.icon}</span>{item.label}</button>)}</nav><div className="sidebar-bottom"><button className={view === "Settings" ? "nav-item active" : "nav-item"} onClick={() => setView("Settings")} type="button"><span className="nav-icon"><SettingsIcon /></span>Settings</button><div className="account-menu"><button className="profile" type="button" aria-expanded={accountOpen} aria-haspopup="menu" onClick={() => setAccountOpen(!accountOpen)}><span className="avatar">{session.displayName[0]?.toUpperCase()}</span><span><strong>{session.displayName}</strong><small>{session.email}</small></span><ChevronDownIcon size={15} /></button>{accountOpen && <div className="account-popover" role="menu"><button type="button" role="menuitem" onClick={onSwitchAccount}>Switch account</button><button type="button" role="menuitem" onClick={() => void onLogOff()}>Log off</button><button className="danger-action" type="button" role="menuitem" onClick={() => void remove()}>Remove this account</button></div>}</div></div></aside><main id="main-content" className="content" tabIndex={-1}><header className="topbar"><div><p className="eyebrow">NORDIEE LAUNCHER</p><h1>{view}</h1></div><div className="service-status"><span /> All systems operational</div></header>{view === "Home" && <Home />}{view === "Library" && <EmptyState title="Your library is ready" text="Games you own and their installation state will be shown here." action="Browse library" />}{view === "Downloads" && <EmptyState title="No active downloads" text="Game installs, updates and repairs will appear here." action="Browse library" />}{view === "Settings" && <Settings />}</main></div>;
 }
 
 function Home() { return <section className="home-grid" aria-label="Launcher overview"><article className="welcome-card"><p className="eyebrow">EARLY BUILD</p><h2>Your games, one place.</h2><p>Nordiee is getting ready. Your verified account will connect your library, downloads and settings.</p><button className="primary-button" type="button">View your library</button></article><article className="panel"><p className="panel-label">DOWNLOADS</p><h3>Nothing in queue</h3><p>Game installs, updates and repairs will appear here.</p></article><article className="panel full-width"><div className="panel-heading"><div><p className="panel-label">LIBRARY</p><h3>Ready when you are</h3></div><span className="count">0 games</span></div><p>Your library will appear here after your account has games.</p></article></section>; }
