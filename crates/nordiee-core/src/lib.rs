@@ -28,8 +28,10 @@ pub struct ManifestFile {
 
 impl GameManifest {
     pub fn validate(&self) -> Result<(), &'static str> {
-        if self.game_id.trim().is_empty() {
-            return Err("manifest game id cannot be empty");
+        if self.game_id.trim().is_empty()
+            || !self.game_id.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+        {
+            return Err("manifest game id must be a safe identifier");
         }
         if self.version.trim().is_empty() {
             return Err("manifest version cannot be empty");
@@ -227,6 +229,21 @@ mod tests {
     #[test]
     fn rejects_empty_game_id() {
         assert!(GameId::parse("  ").is_err());
+    }
+
+    #[test]
+    fn rejects_an_unsafe_manifest_game_id() {
+        let manifest = GameManifest {
+            game_id: "../outside".into(),
+            version: "0.1.0".into(),
+            files: vec![ManifestFile {
+                path: "Game.exe".into(),
+                size: 42,
+                sha256: "a".repeat(64),
+                source_url: "https://downloads.nordiee.com/games/nordiee-demo/0.1.0/Game.exe".into(),
+            }],
+        };
+        assert_eq!(manifest.validate(), Err("manifest game id must be a safe identifier"));
     }
 
     #[test]

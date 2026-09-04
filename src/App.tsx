@@ -1,4 +1,6 @@
 import { FormEvent, useEffect, useState, type ReactNode } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ArrowRightIcon, ChevronDownIcon, CloseIcon, DownloadIcon, HomeIcon, LibraryIcon, MaximizeIcon, MinimizeIcon, PlusIcon, SettingsIcon, TrashIcon } from "./Icons";
 import { activeAccountEmail, clearActiveAccount, getAccountSession, listSavedAccounts, migrateLegacyAccounts, removeSavedAccount, saveAccountSession, type AccountSecret, type SavedAccount } from "./accountStore";
@@ -148,6 +150,10 @@ function Library({ accessToken }: { accessToken: string }) {
   const cachedLibrary = readLibraryCache(email);
   const [status, setStatus] = useState<"loading" | "ready" | "offline" | "error">("loading");
   const [games, setGames] = useState<LibraryGame[]>([]);
+  const [installingId, setInstallingId] = useState<string | null>(null);
+  const [installedIds, setInstalledIds] = useState<string[]>([]);
+  const [installError, setInstallError] = useState("");
+  const [downloadProgress, setDownloadProgress] = useState<{ gameId: string; downloadedBytes: number; totalBytes: number } | null>(null);
   const loadLibrary = async () => {
     setStatus("loading");
     try {
@@ -165,11 +171,37 @@ function Library({ accessToken }: { accessToken: string }) {
     }
   };
   useEffect(() => { void loadLibrary(); }, [accessToken, email]);
+  useEffect(() => {
+    const unlisten = listen<{ gameId: string; downloadedBytes: number; totalBytes: number }>("game-download-progress", (event) => setDownloadProgress(event.payload));
+    return () => { void unlisten.then((cleanup) => cleanup()); };
+  }, []);
+  const install = async (game: LibraryGame) => {
+    setInstallError("");
+    setInstallingId(game.id);
+    setDownloadProgress(null);
+    try {
+      const response = await fetch(`${LIBRARY_API_URL}/${game.id}/manifest`, { headers: { Authorization: `Bearer ${accessToken}` } });
+      if (!response.ok) throw new Error("This game does not have an active install build yet.");
+      const manifest = await response.json();
+      await invoke("install_game", { manifestJson: JSON.stringify(manifest), installRoot: localStorage.getItem("nordiee.installRoot") ?? "C:\\Nordiee Games" });
+      setInstalledIds((current) => [...new Set([...current, game.id])]);
+    } catch (error) {
+      setInstallError(error instanceof Error ? error.message : "We could not install this game.");
+    } finally {
+      setInstallingId(null);
+      setDownloadProgress(null);
+    }
+  };
   if (status === "loading") return <section className="library-state" aria-live="polite"><span className="library-loader" aria-hidden="true" /><h2>Loading your library</h2><p>Fetching the games connected to this account.</p></section>;
   if (status === "error") return <section className="library-state"><div className="empty-mark" aria-hidden="true">N</div><h2>We could not load your library</h2><p>Check your connection, then try again.</p><button className="primary-button" type="button" onClick={() => void loadLibrary()}>Try again</button></section>;
   const offlineNotice = status === "offline" ? <p className="offline-notice" role="status">Offline mode - showing the last library saved on this device.</p> : null;
   if (!games.length) return <>{offlineNotice}<section className="empty-state"><div className="empty-mark" aria-hidden="true">N</div><h2>Your library is ready</h2><p>Games connected to your Nordiee account will appear here.</p></section></>;
-  return <>{offlineNotice}<section className="library-grid" aria-label="Your game library">{games.map((game) => <article className="library-card" key={game.id}><div className="library-cover" aria-hidden="true">N</div><div><p className="panel-label">{game.installState}</p><h2>{game.title}</h2><p>{game.installSizeBytes ? `${Math.round(game.installSizeBytes / 1_000_000_000)} GB` : "Size will be available soon"}</p></div></article>)}</section></>;
+  return <>{offlineNotice}{installError && <p className="install-error" role="alert">{installError}</p>}<section className="library-grid" aria-label="Your game library">{games.map((game) => {
+    const isInstalling = installingId === game.id;
+    const isInstalled = installedIds.includes(game.id) || game.installState === "INSTALLED";
+    const percentage = isInstalling && downloadProgress?.gameId === game.id && downloadProgress.totalBytes ? Math.round((downloadProgress.downloadedBytes / downloadProgress.totalBytes) * 100) : null;
+    return <article className="library-card" key={game.id}><div className="library-cover" aria-hidden="true">N</div><div><p className="panel-label">{isInstalled ? "INSTALLED" : isInstalling ? "DOWNLOADING" : game.installState}</p><h2>{game.title}</h2><p>{isInstalling && percentage !== null ? `${percentage}% downloaded` : game.installSizeBytes ? `${Math.round(game.installSizeBytes / 1_000_000_000)} GB` : "Size will be available soon"}</p><button className="library-action" type="button" disabled={isInstalling || isInstalled} onClick={() => void install(game)}>{isInstalled ? "Installed" : isInstalling ? percentage !== null ? `Downloading ${percentage}%` : "Preparing" : "Install"}</button></div></article>;
+  })}</section></>;
 }
 function EmptyState({ title, text, action }: { title: string; text: string; action: string }) { return <section className="empty-state"><div className="empty-mark" aria-hidden="true">N</div><h2>{title}</h2><p>{text}</p><button className="primary-button" type="button">{action}</button></section>; }
 function Settings() { return <section className="settings"><article className="panel"><p className="panel-label">LAUNCHER</p><h3>Application settings</h3><div className="setting-row"><div><strong>Launch at startup</strong><small>Start Nordiee when you sign in to Windows.</small></div><button className="toggle" type="button" aria-label="Launch at startup, disabled" /></div><div className="setting-row"><div><strong>Download limit</strong><small>No limit configured.</small></div><button className="select-button" type="button">Unlimited</button></div></article></section>; }
