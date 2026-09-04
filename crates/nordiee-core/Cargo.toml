@@ -6,3 +6,6 @@ description = "Framework-independent core for Nordiee launcher operations"
 
 [lib]
 path = "src/lib.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
