@@ -562,6 +562,7 @@ function Library({ accessToken, favoriteGameIds, recentGames, searchRequest, pla
   const [installDialog, setInstallDialog] = useState<{ game: LibraryGame; root: string; freeBytes: number } | null>(null);
   useEffect(() => { if (searchRequest) librarySearchRef.current?.focus(); }, [searchRequest]);
   const saveGameInstallRoot = (gameId: string, root: string) => setGameInstallRoots((current) => {
+    if (current[gameId] === root) return current;
     const next = { ...current, [gameId]: root };
     localStorage.setItem(`nordiee.gameInstallRoots.${email.toLocaleLowerCase()}`, JSON.stringify(next));
     return next;
