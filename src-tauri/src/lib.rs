@@ -3,7 +3,7 @@ use futures_util::StreamExt;
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{atomic::{AtomicBool, Ordering}, Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, State};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -23,6 +23,22 @@ fn default_install_root() -> Result<String, String> {
 const ACCOUNT_SECRET_SERVICE: &str = "com.nordiee.launcher.account";
 
 struct RunningGames(Arc<Mutex<HashSet<String>>>);
+struct DownloadControls {
+    paused: AtomicBool,
+    resumed: tokio::sync::Notify,
+}
+
+impl DownloadControls {
+    fn new() -> Self { Self { paused: AtomicBool::new(false), resumed: tokio::sync::Notify::new() } }
+
+    async fn wait_until_resumed(&self) {
+        while self.paused.load(Ordering::Acquire) {
+            let notified = self.resumed.notified();
+            if !self.paused.load(Ordering::Acquire) { break; }
+            notified.await;
+        }
+    }
+}
 
 fn account_entry(email: &str) -> Result<Entry, String> {
     Entry::new(ACCOUNT_SECRET_SERVICE, email).map_err(|error| error.to_string())
@@ -50,15 +66,15 @@ fn remove_account_secret(email: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn install_game(app: AppHandle, manifest_json: String, install_root: String, download_limit_mbps: Option<u64>) -> Result<serde_json::Value, String> {
+async fn install_game(app: AppHandle, controls: State<'_, DownloadControls>, manifest_json: String, install_root: String, download_limit_mbps: Option<u64>) -> Result<serde_json::Value, String> {
     let manifest: nordiee_core::GameManifest = serde_json::from_str(&manifest_json)
         .map_err(|_| "The game build manifest is invalid.".to_string())?;
     manifest.validate().map_err(|error| error.to_string())?;
-    download_manifest(&app, &manifest, &install_root, None, download_limit_mbps).await
+    download_manifest(&app, &controls, &manifest, &install_root, None, download_limit_mbps).await
 }
 
 #[tauri::command]
-async fn repair_game(app: AppHandle, game_id: String, install_root: String, download_limit_mbps: Option<u64>) -> Result<serde_json::Value, String> {
+async fn repair_game(app: AppHandle, controls: State<'_, DownloadControls>, game_id: String, install_root: String, download_limit_mbps: Option<u64>) -> Result<serde_json::Value, String> {
     if !safe_game_id(&game_id) {
         return Err("The game identifier is invalid.".to_string());
     }
@@ -80,12 +96,12 @@ async fn repair_game(app: AppHandle, game_id: String, install_root: String, down
         return Ok(serde_json::json!({ "gameId": game_id, "repairedFiles": 0 }));
     }
     let repaired_files = damaged_files.len();
-    download_manifest(&app, &manifest, &install_root, Some(&damaged_files), download_limit_mbps).await?;
+    download_manifest(&app, &controls, &manifest, &install_root, Some(&damaged_files), download_limit_mbps).await?;
     Ok(serde_json::json!({ "gameId": game_id, "repairedFiles": repaired_files }))
 }
 
 #[tauri::command]
-async fn update_game(app: AppHandle, manifest_json: String, install_root: String, download_limit_mbps: Option<u64>) -> Result<serde_json::Value, String> {
+async fn update_game(app: AppHandle, controls: State<'_, DownloadControls>, manifest_json: String, install_root: String, download_limit_mbps: Option<u64>) -> Result<serde_json::Value, String> {
     let manifest: nordiee_core::GameManifest = serde_json::from_str(&manifest_json)
         .map_err(|_| "The game build manifest is invalid.".to_string())?;
     manifest.validate().map_err(|error| error.to_string())?;
@@ -101,11 +117,11 @@ async fn update_game(app: AppHandle, manifest_json: String, install_root: String
         }
     }
     let changed_file_count = changed_files.len();
-    download_manifest(&app, &manifest, &install_root, Some(&changed_files), download_limit_mbps).await?;
+    download_manifest(&app, &controls, &manifest, &install_root, Some(&changed_files), download_limit_mbps).await?;
     Ok(serde_json::json!({ "gameId": manifest.game_id, "version": manifest.version, "changedFiles": changed_file_count }))
 }
 
-async fn download_manifest(app: &AppHandle, manifest: &nordiee_core::GameManifest, install_root: &str, selected_files: Option<&HashSet<String>>, download_limit_mbps: Option<u64>) -> Result<serde_json::Value, String> {
+async fn download_manifest(app: &AppHandle, controls: &DownloadControls, manifest: &nordiee_core::GameManifest, install_root: &str, selected_files: Option<&HashSet<String>>, download_limit_mbps: Option<u64>) -> Result<serde_json::Value, String> {
     let game_directory = PathBuf::from(install_root).join(&manifest.game_id);
     tokio::fs::create_dir_all(&game_directory).await.map_err(|error| error.to_string())?;
     let total_bytes = manifest.files.iter().filter(|file| selected_files.map_or(true, |selected| selected.contains(&file.path))).map(|file| file.size).sum::<u64>();
@@ -145,6 +161,7 @@ async fn download_manifest(app: &AppHandle, manifest: &nordiee_core::GameManifes
         };
 
         while let Some(chunk) = stream.next().await {
+            controls.wait_until_resumed().await;
             let chunk = chunk.map_err(|error| error.to_string())?;
             output.write_all(&chunk).await.map_err(|error| error.to_string())?;
             checksum.update(&chunk);
@@ -173,6 +190,19 @@ async fn download_manifest(app: &AppHandle, manifest: &nordiee_core::GameManifes
         .map_err(|error| error.to_string())?;
     let _ = app.emit("game-download-complete", serde_json::json!({ "gameId": manifest.game_id, "path": game_directory }));
     Ok(serde_json::json!({ "gameId": manifest.game_id, "path": game_directory, "version": manifest.version }))
+}
+
+#[tauri::command]
+fn pause_downloads(app: AppHandle, controls: State<'_, DownloadControls>) {
+    controls.paused.store(true, Ordering::Release);
+    let _ = app.emit("download-transfer-state", serde_json::json!({ "paused": true }));
+}
+
+#[tauri::command]
+fn resume_downloads(app: AppHandle, controls: State<'_, DownloadControls>) {
+    controls.paused.store(false, Ordering::Release);
+    controls.resumed.notify_waiters();
+    let _ = app.emit("download-transfer-state", serde_json::json!({ "paused": false }));
 }
 
 struct DownloadRateLimiter {
@@ -363,9 +393,10 @@ async fn diagnostics_check_install_root(install_root: String) -> Result<bool, St
 pub fn run() {
     tauri::Builder::default()
         .manage(RunningGames(Arc::new(Mutex::new(HashSet::new()))))
+        .manage(DownloadControls::new())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .invoke_handler(tauri::generate_handler![launcher_version, default_install_root, save_account_secret, load_account_secret, remove_account_secret, install_game, repair_game, update_game, verify_game, installed_game_version, uninstall_game, launch_game, diagnostics_check_endpoint, diagnostics_check_install_root])
+        .invoke_handler(tauri::generate_handler![launcher_version, default_install_root, save_account_secret, load_account_secret, remove_account_secret, install_game, repair_game, update_game, pause_downloads, resume_downloads, verify_game, installed_game_version, uninstall_game, launch_game, diagnostics_check_endpoint, diagnostics_check_install_root])
         .run(tauri::generate_context!())
         .expect("error while running Nordiee Launcher");
 }
