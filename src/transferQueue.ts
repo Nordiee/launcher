@@ -1,7 +1,7 @@
 import type { LibraryGame } from "./libraryCache";
 
 export type TransferKind = "install" | "repair" | "update";
-export type QueuedTransfer = { id: string; game: LibraryGame; kind: TransferKind };
+export type QueuedTransfer = { id: string; game: LibraryGame; kind: TransferKind; installRoot?: string };
 
 const transferQueueEvent = "nordiee-transfer-queue-changed";
 let currentTransferQueue: QueuedTransfer[] = [];
@@ -14,7 +14,7 @@ function queueKey(accountEmail: string) {
 function storedQueue(key: string): QueuedTransfer[] {
   try {
     const saved = JSON.parse(localStorage.getItem(key) ?? "[]");
-    return Array.isArray(saved) ? saved.filter((transfer): transfer is QueuedTransfer => typeof transfer?.id === "string" && typeof transfer?.kind === "string" && typeof transfer?.game?.id === "string" && typeof transfer?.game?.title === "string") : [];
+    return Array.isArray(saved) ? saved.filter((transfer): transfer is QueuedTransfer => typeof transfer?.id === "string" && typeof transfer?.kind === "string" && typeof transfer?.game?.id === "string" && typeof transfer?.game?.title === "string" && (transfer.installRoot === undefined || typeof transfer.installRoot === "string")) : [];
   } catch {
     return [];
   }

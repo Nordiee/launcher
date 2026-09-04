@@ -36,6 +36,30 @@ async function installRoot() {
   return saved?.trim() || invoke<string>("default_install_root");
 }
 
+async function installRoots() {
+  try {
+    const saved = JSON.parse(localStorage.getItem("nordiee.installRoots") ?? "[]") as unknown;
+    if (Array.isArray(saved)) {
+      const roots = [...new Set(saved.filter((root): root is string => typeof root === "string" && root.trim().length > 0).map((root) => root.trim()))];
+      if (roots.length) return roots;
+    }
+  } catch { /* fall back to the legacy location */ }
+  const legacyRoot = await installRoot();
+  localStorage.setItem("nordiee.installRoots", JSON.stringify([legacyRoot]));
+  return [legacyRoot];
+}
+
+function rememberInstallRoot(root: string) {
+  const normalized = root.trim();
+  if (!normalized) return;
+  void installRoots().then((roots) => localStorage.setItem("nordiee.installRoots", JSON.stringify([...new Set([...roots, normalized])])));
+}
+
+function readGameInstallRoots(email: string): Record<string, string> {
+  try { return JSON.parse(localStorage.getItem(`nordiee.gameInstallRoots.${email.toLocaleLowerCase()}`) ?? "{}"); }
+  catch { return {}; }
+}
+
 function configuredDownloadLimitMbps(): number | null {
   const value = Number(localStorage.getItem("nordiee.downloadLimitMbps"));
   return [10, 25, 50, 100].includes(value) ? value : null;
@@ -519,6 +543,7 @@ function Library({ accessToken, favoriteGameIds, recentGames, searchRequest, pla
   const [installingId, setInstallingId] = useState<string | null>(null);
   const [installedIds, setInstalledIds] = useState<string[]>([]);
   const [installedSizes, setInstalledSizes] = useState<Record<string, number>>({});
+  const [gameInstallRoots, setGameInstallRoots] = useState<Record<string, string>>(() => readGameInstallRoots(email));
   const [launchOptions, setLaunchOptions] = useState<Record<string, string>>(() => {
     try { return JSON.parse(localStorage.getItem("nordiee.launchOptions") ?? "{}"); }
     catch { return {}; }
@@ -536,6 +561,12 @@ function Library({ accessToken, favoriteGameIds, recentGames, searchRequest, pla
   const processingTransferRef = useRef(false);
   const [installDialog, setInstallDialog] = useState<{ game: LibraryGame; root: string; freeBytes: number } | null>(null);
   useEffect(() => { if (searchRequest) librarySearchRef.current?.focus(); }, [searchRequest]);
+  const saveGameInstallRoot = (gameId: string, root: string) => setGameInstallRoots((current) => {
+    const next = { ...current, [gameId]: root };
+    localStorage.setItem(`nordiee.gameInstallRoots.${email.toLocaleLowerCase()}`, JSON.stringify(next));
+    return next;
+  });
+  const rootForGame = async (gameId: string) => gameInstallRoots[gameId] ?? installRoot();
   const loadLibrary = async () => {
     setStatus("loading");
     try {
@@ -563,13 +594,21 @@ function Library({ accessToken, favoriteGameIds, recentGames, searchRequest, pla
     let active = true;
     const findInstalledGames = async () => {
       try {
-        const root = await installRoot();
+        const roots = await installRoots();
         const checks = await Promise.all(games.map(async (game) => {
-          const version = await invoke<string | null>("installed_game_version", { gameId: game.id, installRoot: root });
-          const size = version ? await invoke<number | null>("installed_game_size", { gameId: game.id, installRoot: root }) : null;
-          return { id: game.id, version, size };
+          const knownRoot = gameInstallRoots[game.id];
+          const candidates = knownRoot ? [knownRoot, ...roots.filter((root) => root !== knownRoot)] : roots;
+          for (const root of candidates) {
+            const version = await invoke<string | null>("installed_game_version", { gameId: game.id, installRoot: root });
+            if (version) {
+              const size = await invoke<number | null>("installed_game_size", { gameId: game.id, installRoot: root });
+              return { id: game.id, version, size, root };
+            }
+          }
+          return { id: game.id, version: null, size: null, root: null };
         }));
         const installedGameIds = checks.filter((check) => check.version).map((check) => check.id);
+        for (const check of checks) if (check.root) saveGameInstallRoot(check.id, check.root);
         if (active) setInstalledIds(installedGameIds);
         if (active) setInstalledSizes(Object.fromEntries(checks.flatMap((check) => check.size === null ? [] : [[check.id, check.size]])));
         if (localStorage.getItem("nordiee.autoUpdateGames") !== "false") {
@@ -578,7 +617,7 @@ function Library({ accessToken, favoriteGameIds, recentGames, searchRequest, pla
               const response = await fetch(`${LIBRARY_API_URL}/${game.id}/manifest`, { headers: { Authorization: `Bearer ${accessToken}` } });
               if (!response.ok) continue;
               const manifest = await response.json();
-              const result = await invoke<{ version: string; changedFiles: number }>("update_game", { manifestJson: JSON.stringify(manifest), installRoot: root, downloadLimitMbps: configuredDownloadLimitMbps() });
+              const result = await invoke<{ version: string; changedFiles: number }>("update_game", { manifestJson: JSON.stringify(manifest), installRoot: await rootForGame(game.id), downloadLimitMbps: configuredDownloadLimitMbps() });
               if (active && result.changedFiles) {
                 setUpdateStatus((current) => ({ ...current, [game.id]: updateSummary(result.version, result.changedFiles) }));
                 onNotify("Game updated", `${game.title}: ${updateSummary(result.version, result.changedFiles)}`, "success");
@@ -594,8 +633,8 @@ function Library({ accessToken, favoriteGameIds, recentGames, searchRequest, pla
     };
     if (games.length) void findInstalledGames();
     return () => { active = false; };
-  }, [accessToken, gameUpdateModes, games]);
-  const runInstall = async (game: LibraryGame) => {
+  }, [accessToken, gameInstallRoots, gameUpdateModes, games]);
+  const runInstall = async (game: LibraryGame, selectedRoot?: string) => {
     setInstallError("");
     setInstallingId(game.id);
     setDownloadProgress(null);
@@ -604,7 +643,9 @@ function Library({ accessToken, favoriteGameIds, recentGames, searchRequest, pla
       const response = await fetch(`${LIBRARY_API_URL}/${game.id}/manifest`, { headers: { Authorization: `Bearer ${accessToken}` } });
       if (!response.ok) throw new Error("This game does not have an active install build yet.");
       const manifest = await response.json();
-      await invoke("install_game", { manifestJson: JSON.stringify(manifest), installRoot: await installRoot(), downloadLimitMbps: configuredDownloadLimitMbps() });
+      const destinationRoot = selectedRoot ?? await installRoot();
+      await invoke("install_game", { manifestJson: JSON.stringify(manifest), installRoot: destinationRoot, downloadLimitMbps: configuredDownloadLimitMbps() });
+      saveGameInstallRoot(game.id, destinationRoot);
       setInstalledIds((current) => [...new Set([...current, game.id])]);
       onNotify("Game installed", `${game.title} is ready to play.`, "success");
     } catch (error) {
@@ -621,7 +662,7 @@ function Library({ accessToken, favoriteGameIds, recentGames, searchRequest, pla
     setInstallError("");
     setVerification((current) => ({ ...current, [game.id]: "verifying" }));
     try {
-      const result = await invoke<{ verified: boolean }>("verify_game", { gameId: game.id, installRoot: await installRoot() });
+      const result = await invoke<{ verified: boolean }>("verify_game", { gameId: game.id, installRoot: await rootForGame(game.id) });
       setVerification((current) => ({ ...current, [game.id]: result.verified ? "verified" : "repair" }));
       onNotify(result.verified ? "Files verified" : "Repair required", result.verified ? `${game.title} files are healthy.` : `${game.title} has files that need repair.`, result.verified ? "success" : "error");
     } catch (error) {
@@ -635,7 +676,7 @@ function Library({ accessToken, favoriteGameIds, recentGames, searchRequest, pla
     setDownloadProgress(null);
     startDownload(game, "Repairing");
     try {
-      await invoke("repair_game", { gameId: game.id, installRoot: await installRoot(), downloadLimitMbps: configuredDownloadLimitMbps() });
+      await invoke("repair_game", { gameId: game.id, installRoot: await rootForGame(game.id), downloadLimitMbps: configuredDownloadLimitMbps() });
       setVerification((current) => ({ ...current, [game.id]: "verified" }));
       onNotify("Files repaired", `${game.title} is ready to play.`, "success");
     } catch (error) {
@@ -653,7 +694,7 @@ function Library({ accessToken, favoriteGameIds, recentGames, searchRequest, pla
     setInstallError("");
     setInstallingId(game.id);
     try {
-      await invoke("uninstall_game", { gameId: game.id, installRoot: await installRoot() });
+      await invoke("uninstall_game", { gameId: game.id, installRoot: await rootForGame(game.id) });
       setInstalledIds((current) => current.filter((id) => id !== game.id));
       setVerification((current) => { const next = { ...current }; delete next[game.id]; return next; });
     } catch (error) {
@@ -665,7 +706,7 @@ function Library({ accessToken, favoriteGameIds, recentGames, searchRequest, pla
   const openFolder = async (game: LibraryGame) => {
     setInstallError("");
     try {
-      await invoke("open_game_folder", { gameId: game.id, installRoot: await installRoot() });
+      await invoke("open_game_folder", { gameId: game.id, installRoot: await rootForGame(game.id) });
     } catch (error) {
       setInstallError(error instanceof Error ? error.message : "We could not open this game folder.");
     }
@@ -690,7 +731,7 @@ function Library({ accessToken, favoriteGameIds, recentGames, searchRequest, pla
         const response = await fetch(`${LIBRARY_API_URL}/${game.id}/manifest`, { headers: { Authorization: `Bearer ${accessToken}` } });
         if (!response.ok) throw new Error("We could not check this game for updates.");
         const manifest = await response.json();
-        const updateResult = await invoke<{ version: string; changedFiles: number }>("update_game", { manifestJson: JSON.stringify(manifest), installRoot: await installRoot(), downloadLimitMbps: configuredDownloadLimitMbps() });
+        const updateResult = await invoke<{ version: string; changedFiles: number }>("update_game", { manifestJson: JSON.stringify(manifest), installRoot: await rootForGame(game.id), downloadLimitMbps: configuredDownloadLimitMbps() });
         if (updateResult.changedFiles) {
           setUpdateStatus((current) => ({ ...current, [game.id]: updateSummary(updateResult.version, updateResult.changedFiles) }));
           onNotify("Game updated", `${game.title}: ${updateSummary(updateResult.version, updateResult.changedFiles)}`, "success");
@@ -699,7 +740,7 @@ function Library({ accessToken, favoriteGameIds, recentGames, searchRequest, pla
         if (!(error instanceof TypeError)) throw error;
         setUpdateStatus((current) => ({ ...current, [game.id]: "Offline - starting the installed version." }));
       }
-      await invoke("launch_game", { gameId: game.id, installRoot: await installRoot(), launchArguments: parseLaunchOptions(launchOptions[game.id] ?? "") });
+      await invoke("launch_game", { gameId: game.id, installRoot: await rootForGame(game.id), launchArguments: parseLaunchOptions(launchOptions[game.id] ?? "") });
       onGameLaunched({ id: game.id, title: game.title });
     } catch (error) {
       const message = error instanceof Error ? error.message : "We could not launch this game.";
@@ -720,7 +761,7 @@ function Library({ accessToken, favoriteGameIds, recentGames, searchRequest, pla
       const response = await fetch(`${LIBRARY_API_URL}/${game.id}/manifest`, { headers: { Authorization: `Bearer ${accessToken}` } });
       if (!response.ok) throw new Error("We could not check this game for updates.");
       const manifest = await response.json();
-      const result = await invoke<{ version: string; changedFiles: number }>("update_game", { manifestJson: JSON.stringify(manifest), installRoot: await installRoot(), downloadLimitMbps: configuredDownloadLimitMbps() });
+      const result = await invoke<{ version: string; changedFiles: number }>("update_game", { manifestJson: JSON.stringify(manifest), installRoot: await rootForGame(game.id), downloadLimitMbps: configuredDownloadLimitMbps() });
       setUpdateStatus((current) => ({ ...current, [game.id]: result.changedFiles ? updateSummary(result.version, result.changedFiles) : "Already up to date." }));
       setVerification((current) => ({ ...current, [game.id]: "verified" }));
       onNotify(result.changedFiles ? "Game updated" : "Game is up to date", result.changedFiles ? `${game.title}: ${updateSummary(result.version, result.changedFiles)}` : `${game.title} already has the latest files.`, "success");
@@ -740,7 +781,7 @@ function Library({ accessToken, favoriteGameIds, recentGames, searchRequest, pla
     const next = takeNextTransfer();
     if (!next) { processingTransferRef.current = false; return; }
     try {
-      if (next.kind === "install") await runInstall(next.game);
+      if (next.kind === "install") await runInstall(next.game, next.installRoot);
       else if (next.kind === "repair") await runRepair(next.game);
       else await runUpdate(next.game);
     } finally {
@@ -748,10 +789,10 @@ function Library({ accessToken, favoriteGameIds, recentGames, searchRequest, pla
       void processTransferQueue();
     }
   };
-  const enqueueTransfer = (game: LibraryGame, kind: TransferKind) => {
+  const enqueueTransfer = (game: LibraryGame, kind: TransferKind, selectedRoot?: string) => {
     const alreadyQueued = readTransferQueue().some((transfer) => transfer.game.id === game.id);
     if (installingId === game.id || alreadyQueued) return;
-    enqueueQueuedTransfer({ id: crypto.randomUUID(), game, kind });
+    enqueueQueuedTransfer({ id: crypto.randomUUID(), game, kind, installRoot: selectedRoot });
     if (processingTransferRef.current) onNotify("Added to queue", `${game.title} will ${kind === "install" ? "install" : kind === "repair" ? "repair" : "update"} after the active transfer.`, "info");
     void processTransferQueue();
   };
@@ -766,7 +807,7 @@ function Library({ accessToken, favoriteGameIds, recentGames, searchRequest, pla
   const openInstallDialog = async (game: LibraryGame) => {
     setInstallError("");
     try {
-      const root = await installRoot();
+      const root = (await installRoots())[0];
       const freeBytes = await invoke<number>("install_location_free_space", { installRoot: root });
       setInstallDialog({ game, root, freeBytes });
     } catch (error) {
@@ -831,15 +872,30 @@ function Library({ accessToken, favoriteGameIds, recentGames, searchRequest, pla
 }
 
 function InstallDialog({ game, root, freeBytes, onCancel, onConfirm }: { game: LibraryGame; root: string; freeBytes: number; onCancel: () => void; onConfirm: () => void }) {
+  const [roots, setRoots] = useState<string[]>([root]);
+  const [selectedRoot, setSelectedRoot] = useState(root);
+  const [availableBytes, setAvailableBytes] = useState(freeBytes);
+  const [customRoot, setCustomRoot] = useState("");
   useEffect(() => {
     const closeOnEscape = (event: KeyboardEvent) => { if (event.key === "Escape") onCancel(); };
     window.addEventListener("keydown", closeOnEscape);
+    void installRoots().then((savedRoots) => { setRoots(savedRoots); if (savedRoots[0]) setSelectedRoot(savedRoots[0]); });
     return () => window.removeEventListener("keydown", closeOnEscape);
   }, [onCancel]);
+  useEffect(() => { void invoke<number>("install_location_free_space", { installRoot: selectedRoot }).then(setAvailableBytes).catch(() => setAvailableBytes(0)); }, [selectedRoot]);
   const requiredBytes = game.installSizeBytes ?? 0;
-  const hasSpace = freeBytes >= requiredBytes;
+  const hasSpace = availableBytes >= requiredBytes;
   const gigabytes = (bytes: number) => `${(bytes / 1_000_000_000).toFixed(1)} GB`;
-  return <div className="install-dialog-overlay" role="presentation" onMouseDown={onCancel}><section className="install-dialog" role="dialog" aria-modal="true" aria-labelledby="install-dialog-title" onMouseDown={(event) => event.stopPropagation()}><p className="eyebrow">INSTALL GAME</p><h2 id="install-dialog-title">Install {game.title}</h2><p className="install-dialog-copy">Nordiee verifies files during download and keeps partial files if the transfer is paused.</p><dl><div><dt>Location</dt><dd title={root}>{root}</dd></div><div><dt>Required</dt><dd>{requiredBytes ? gigabytes(requiredBytes) : "Size pending"}</dd></div><div><dt>Available</dt><dd className={hasSpace ? "space-ready" : "space-low"}>{gigabytes(freeBytes)}</dd></div></dl>{!hasSpace && <p className="install-dialog-error" role="alert">Not enough free disk space for this game.</p>}<div className="install-dialog-actions"><button className="library-action" type="button" onClick={onCancel}>Cancel</button><button className="primary-button" type="button" disabled={!hasSpace} onClick={onConfirm}>Add to queue</button></div></section></div>;
+  const addLocation = () => {
+    const next = customRoot.trim();
+    if (!next) return;
+    rememberInstallRoot(next);
+    setRoots((current) => [...new Set([...current, next])]);
+    setSelectedRoot(next);
+    setCustomRoot("");
+  };
+  const queueInstall = () => { localStorage.setItem("nordiee.installRoot", selectedRoot); rememberInstallRoot(selectedRoot); onConfirm(); };
+  return <div className="install-dialog-overlay" role="presentation" onMouseDown={onCancel}><section className="install-dialog" role="dialog" aria-modal="true" aria-labelledby="install-dialog-title" onMouseDown={(event) => event.stopPropagation()}><p className="eyebrow">INSTALL GAME</p><h2 id="install-dialog-title">Install {game.title}</h2><p className="install-dialog-copy">Choose a library location. Nordiee verifies files during download and keeps partial files if the transfer is paused.</p><dl><div><dt>Location</dt><dd><select value={selectedRoot} onChange={(event) => setSelectedRoot(event.target.value)} aria-label="Install location">{roots.map((location) => <option key={location} value={location}>{location}</option>)}</select></dd></div><div><dt>Required</dt><dd>{requiredBytes ? gigabytes(requiredBytes) : "Size pending"}</dd></div><div><dt>Available</dt><dd className={hasSpace ? "space-ready" : "space-low"}>{gigabytes(availableBytes)}</dd></div></dl><div className="install-location-add"><label>Add another location<input value={customRoot} onChange={(event) => setCustomRoot(event.target.value)} placeholder="D:\\NordieeApps" spellCheck="false" /></label><button className="library-action" type="button" onClick={addLocation}>Add</button></div>{!hasSpace && <p className="install-dialog-error" role="alert">Not enough free disk space for this game.</p>}<div className="install-dialog-actions"><button className="library-action" type="button" onClick={onCancel}>Cancel</button><button className="primary-button" type="button" disabled={!hasSpace} onClick={queueInstall}>Add to queue</button></div></section></div>;
 }
 function Downloads({ download, queuedTransfers, paused, onTogglePaused }: { download: DownloadActivity | null; queuedTransfers: QueuedTransfer[]; paused: boolean; onTogglePaused: () => void }) {
   if (!download && !queuedTransfers.length) return <EmptyState title="No active downloads" text="Game installs, updates and repairs will appear here." action="Browse library" />;
