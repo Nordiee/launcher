@@ -7,6 +7,7 @@ import { activeAccountEmail, clearActiveAccount, getAccountSession, listSavedAcc
 import { readLibraryCache, saveLibraryCache, type LibraryGame } from "./libraryCache";
 import { applyAvailableUpdate, type UpdateState } from "./updates";
 import { readNotifications, saveNotifications, type LauncherNotification } from "./notificationStore";
+import { listenForTransferQueue, publishTransferQueue, readTransferQueue, type QueuedTransfer, type TransferKind } from "./transferQueue";
 
 type View = "Home" | "Library" | "Downloads" | "Settings";
 type AuthMode = "sign-in" | "sign-up";
@@ -17,9 +18,6 @@ type VerificationState = "verifying" | "verified" | "repair";
 type DownloadActivity = { gameId: string; title: string; phase: string; downloadedBytes?: number; totalBytes?: number; speedBytesPerSecond?: number; sampledAt?: number };
 type DiagnosticResult = "idle" | "checking" | "pass" | "fail";
 type NotificationKind = LauncherNotification["kind"];
-type TransferKind = "install" | "repair" | "update";
-type QueuedTransfer = { id: string; game: LibraryGame; kind: TransferKind };
-
 const API_BASE_URL = "https://api.nordiee.com/api/v1/auth";
 const LIBRARY_API_URL = "https://api.nordiee.com/api/v1/library";
 
@@ -189,6 +187,7 @@ function Launcher({ session, onSwitchAccount, onLogOff, onRemoveAccount }: { ses
   const [runningGameIds, setRunningGameIds] = useState<string[]>([]);
   const [notifications, setNotifications] = useState<LauncherNotification[]>(readNotifications);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [queuedTransfers, setQueuedTransfers] = useState<QueuedTransfer[]>(readTransferQueue);
   const addNotification = useCallback((title: string, message: string, kind: NotificationKind = "info") => setNotifications((current) => {
     const next = [{ id: crypto.randomUUID(), title, message, kind, createdAt: Date.now(), read: false }, ...current].slice(0, 30);
     saveNotifications(next);
@@ -214,6 +213,7 @@ function Launcher({ session, onSwitchAccount, onLogOff, onRemoveAccount }: { ses
     const unlisten = listen<{ gameId: string; running: boolean }>("game-running-state", (event) => setRunningGameIds((current) => event.payload.running ? [...new Set([...current, event.payload.gameId])] : current.filter((id) => id !== event.payload.gameId)));
     return () => { void unlisten.then((cleanup) => cleanup()); };
   }, []);
+  useEffect(() => listenForTransferQueue(setQueuedTransfers), []);
   useEffect(() => {
     const unlisten = listen<{ paused?: boolean; cancelled?: boolean }>("download-transfer-state", (event) => {
       if (event.payload.cancelled) { setDownloadsPaused(false); setDownload(null); }
@@ -239,7 +239,7 @@ function Launcher({ session, onSwitchAccount, onLogOff, onRemoveAccount }: { ses
   };
   const remove = async () => { if (!window.confirm(`Remove ${session.displayName} from this computer?`)) return; await onRemoveAccount(session); };
   const unreadCount = notifications.filter((notification) => !notification.read).length;
-  return <div className="launcher-shell"><a className="skip-link" href="#main-content">Skip to content</a><aside className="sidebar" aria-label="Launcher navigation"><div className="sidebar-brand"><img src="/logo.svg" alt="Nordiee" /><span>NORDIEE</span></div><nav className="navigation">{navigation.map((item) => <button className={view === item.label ? "nav-item active" : "nav-item"} key={item.label} onClick={() => setView(item.label)} type="button"><span className="nav-icon">{item.icon}</span>{item.label}</button>)}</nav><div className="sidebar-bottom"><button className={view === "Settings" ? "nav-item active" : "nav-item"} onClick={() => setView("Settings")} type="button"><span className="nav-icon"><SettingsIcon /></span>Settings</button><div className="account-menu"><button className="profile" type="button" aria-expanded={accountOpen} aria-haspopup="menu" onClick={() => setAccountOpen(!accountOpen)}><span className="avatar">{session.displayName[0]?.toUpperCase()}</span><span><strong>{session.displayName}</strong><small>{session.email}</small></span><ChevronDownIcon size={15} /></button>{accountOpen && <div className="account-popover" role="menu"><button type="button" role="menuitem" onClick={onSwitchAccount}>Switch account</button><button type="button" role="menuitem" onClick={() => void onLogOff()}>Log off</button><button className="danger-action" type="button" role="menuitem" onClick={() => void remove()}>Remove this account</button></div>}</div></div></aside><main id="main-content" className="content" tabIndex={-1}><header className="topbar"><div><p className="eyebrow">NORDIEE LAUNCHER</p><h1>{view}</h1></div><div className="topbar-actions"><div className="service-status"><span /> All systems operational</div><NotificationCenter notifications={notifications} open={notificationsOpen} unreadCount={unreadCount} onToggle={() => { const next = !notificationsOpen; setNotificationsOpen(next); if (next) markNotificationsRead(); }} onClear={clearNotifications} /></div></header>{view === "Home" && <Home download={download} onOpenLibrary={() => setView("Library")} onOpenDownloads={() => setView("Downloads")} />}{view === "Library" && <Library accessToken={session.accessToken} onDownload={setDownload} onNotify={addNotification} runningGameIds={runningGameIds} />}{view === "Downloads" && <Downloads download={download} paused={downloadsPaused} onTogglePaused={() => void toggleDownloadsPaused()} />}{view === "Settings" && <Settings />}</main></div>;
+  return <div className="launcher-shell"><a className="skip-link" href="#main-content">Skip to content</a><aside className="sidebar" aria-label="Launcher navigation"><div className="sidebar-brand"><img src="/logo.svg" alt="Nordiee" /><span>NORDIEE</span></div><nav className="navigation">{navigation.map((item) => <button className={view === item.label ? "nav-item active" : "nav-item"} key={item.label} onClick={() => setView(item.label)} type="button"><span className="nav-icon">{item.icon}</span>{item.label}</button>)}</nav><div className="sidebar-bottom"><button className={view === "Settings" ? "nav-item active" : "nav-item"} onClick={() => setView("Settings")} type="button"><span className="nav-icon"><SettingsIcon /></span>Settings</button><div className="account-menu"><button className="profile" type="button" aria-expanded={accountOpen} aria-haspopup="menu" onClick={() => setAccountOpen(!accountOpen)}><span className="avatar">{session.displayName[0]?.toUpperCase()}</span><span><strong>{session.displayName}</strong><small>{session.email}</small></span><ChevronDownIcon size={15} /></button>{accountOpen && <div className="account-popover" role="menu"><button type="button" role="menuitem" onClick={onSwitchAccount}>Switch account</button><button type="button" role="menuitem" onClick={() => void onLogOff()}>Log off</button><button className="danger-action" type="button" role="menuitem" onClick={() => void remove()}>Remove this account</button></div>}</div></div></aside><main id="main-content" className="content" tabIndex={-1}><header className="topbar"><div><p className="eyebrow">NORDIEE LAUNCHER</p><h1>{view}</h1></div><div className="topbar-actions"><div className="service-status"><span /> All systems operational</div><NotificationCenter notifications={notifications} open={notificationsOpen} unreadCount={unreadCount} onToggle={() => { const next = !notificationsOpen; setNotificationsOpen(next); if (next) markNotificationsRead(); }} onClear={clearNotifications} /></div></header>{view === "Home" && <Home download={download} onOpenLibrary={() => setView("Library")} onOpenDownloads={() => setView("Downloads")} />}{view === "Library" && <Library accessToken={session.accessToken} onDownload={setDownload} onNotify={addNotification} runningGameIds={runningGameIds} />}{view === "Downloads" && <Downloads download={download} queuedTransfers={queuedTransfers} paused={downloadsPaused} onTogglePaused={() => void toggleDownloadsPaused()} />}{view === "Settings" && <Settings />}</main></div>;
 }
 
 function NotificationCenter({ notifications, open, unreadCount, onToggle, onClear }: { notifications: LauncherNotification[]; open: boolean; unreadCount: number; onToggle: () => void; onClear: () => void }) {
@@ -472,6 +472,7 @@ function Library({ accessToken, onDownload, onNotify, runningGameIds }: { access
     processingTransferRef.current = true;
     const next = queuedTransfersRef.current.shift();
     setQueuedTransfers([...queuedTransfersRef.current]);
+    publishTransferQueue([...queuedTransfersRef.current]);
     if (!next) { processingTransferRef.current = false; return; }
     try {
       if (next.kind === "install") await runInstall(next.game);
@@ -487,6 +488,7 @@ function Library({ accessToken, onDownload, onNotify, runningGameIds }: { access
     if (installingId === game.id || alreadyQueued) return;
     queuedTransfersRef.current = [...queuedTransfersRef.current, { id: crypto.randomUUID(), game, kind }];
     setQueuedTransfers([...queuedTransfersRef.current]);
+    publishTransferQueue([...queuedTransfersRef.current]);
     if (processingTransferRef.current) onNotify("Added to queue", `${game.title} will ${kind === "install" ? "install" : kind === "repair" ? "repair" : "update"} after the active transfer.`, "info");
     void processTransferQueue();
   };
@@ -494,6 +496,7 @@ function Library({ accessToken, onDownload, onNotify, runningGameIds }: { access
     if (!queuedTransfersRef.current.length) return;
     queuedTransfersRef.current = [];
     setQueuedTransfers([]);
+    publishTransferQueue([]);
     onNotify("Transfer queue cleared", "The active transfer continues and partial files stay safe.", "info");
   };
   const openInstallDialog = async (game: LibraryGame) => {
@@ -540,13 +543,18 @@ function InstallDialog({ game, root, freeBytes, onCancel, onConfirm }: { game: L
   const gigabytes = (bytes: number) => `${(bytes / 1_000_000_000).toFixed(1)} GB`;
   return <div className="install-dialog-overlay" role="presentation" onMouseDown={onCancel}><section className="install-dialog" role="dialog" aria-modal="true" aria-labelledby="install-dialog-title" onMouseDown={(event) => event.stopPropagation()}><p className="eyebrow">INSTALL GAME</p><h2 id="install-dialog-title">Install {game.title}</h2><p className="install-dialog-copy">Nordiee verifies files during download and keeps partial files if the transfer is paused.</p><dl><div><dt>Location</dt><dd title={root}>{root}</dd></div><div><dt>Required</dt><dd>{requiredBytes ? gigabytes(requiredBytes) : "Size pending"}</dd></div><div><dt>Available</dt><dd className={hasSpace ? "space-ready" : "space-low"}>{gigabytes(freeBytes)}</dd></div></dl>{!hasSpace && <p className="install-dialog-error" role="alert">Not enough free disk space for this game.</p>}<div className="install-dialog-actions"><button className="library-action" type="button" onClick={onCancel}>Cancel</button><button className="primary-button" type="button" disabled={!hasSpace} onClick={onConfirm}>Add to queue</button></div></section></div>;
 }
-function Downloads({ download, paused, onTogglePaused }: { download: DownloadActivity | null; paused: boolean; onTogglePaused: () => void }) {
-  if (!download) return <EmptyState title="No active downloads" text="Game installs, updates and repairs will appear here." action="Browse library" />;
+function Downloads({ download, queuedTransfers, paused, onTogglePaused }: { download: DownloadActivity | null; queuedTransfers: QueuedTransfer[]; paused: boolean; onTogglePaused: () => void }) {
+  if (!download && !queuedTransfers.length) return <EmptyState title="No active downloads" text="Game installs, updates and repairs will appear here." action="Browse library" />;
+  if (!download) return <section className="downloads-panel" aria-label="Download queue"><article className="download-card queue-card"><p className="panel-label">TRANSFER QUEUE</p><h2>{queuedTransfers.length} {queuedTransfers.length === 1 ? "game is" : "games are"} waiting</h2><p>Transfers start one at a time to protect your installed files.</p><QueuedTransfers transfers={queuedTransfers} /></article></section>;
   const percentage = download.totalBytes ? Math.min(100, Math.round(((download.downloadedBytes ?? 0) / download.totalBytes) * 100)) : null;
   const transferred = download.downloadedBytes && download.totalBytes ? `${Math.round(download.downloadedBytes / 1_000_000)} MB of ${Math.round(download.totalBytes / 1_000_000)} MB` : "Preparing file transfer";
   const speed = download.speedBytesPerSecond ? `${(download.speedBytesPerSecond / 1_000_000).toFixed(1)} MB/s` : "Calculating speed";
   const cancel = async () => { if (window.confirm(`Cancel ${download.title}? The files already downloaded will be kept for a later resume.`)) await invoke("cancel_downloads"); };
-  return <section className="downloads-panel" aria-label="Active downloads"><article className="download-card"><div className="download-card-heading"><div><p className="panel-label">{paused ? "PAUSED" : download.phase}</p><h2>{download.title}</h2></div><strong>{percentage === null ? "Starting" : `${percentage}%`}</strong></div><div className="download-progress" role="progressbar" aria-label={`${download.title} download progress`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={percentage ?? undefined}><span style={{ width: `${percentage ?? 4}%` }} /></div><div className="download-meta"><p>{paused ? "Transfer paused. Your partial download is kept safely." : transferred}</p><strong>{paused ? "Waiting" : speed}</strong></div><div className="download-controls"><button className="library-action" type="button" aria-pressed={paused} onClick={onTogglePaused}>{paused ? <><PlayIcon />Resume download</> : <><PauseIcon />Pause download</>}</button><button className="library-action download-cancel" type="button" onClick={() => void cancel()}>Cancel download</button></div></article></section>;
+  return <section className="downloads-panel" aria-label="Active downloads"><article className="download-card"><div className="download-card-heading"><div><p className="panel-label">{paused ? "PAUSED" : download.phase}</p><h2>{download.title}</h2></div><strong>{percentage === null ? "Starting" : `${percentage}%`}</strong></div><div className="download-progress" role="progressbar" aria-label={`${download.title} download progress`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={percentage ?? undefined}><span style={{ width: `${percentage ?? 4}%` }} /></div><div className="download-meta"><p>{paused ? "Transfer paused. Your partial download is kept safely." : transferred}</p><strong>{paused ? "Waiting" : speed}</strong></div><div className="download-controls"><button className="library-action" type="button" aria-pressed={paused} onClick={onTogglePaused}>{paused ? <><PlayIcon />Resume download</> : <><PauseIcon />Pause download</>}</button><button className="library-action download-cancel" type="button" onClick={() => void cancel()}>Cancel download</button></div></article>{queuedTransfers.length ? <QueuedTransfers transfers={queuedTransfers} /> : null}</section>;
+}
+function QueuedTransfers({ transfers }: { transfers: QueuedTransfer[] }) {
+  const actionLabel = (kind: TransferKind) => kind === "install" ? "Install" : kind === "repair" ? "Repair" : "Update";
+  return <section className="queued-transfers" aria-label="Transfers waiting in queue"><div className="queued-transfers-heading"><p className="panel-label">UP NEXT</p><span>{transfers.length} waiting</span></div><ol>{transfers.map((transfer, index) => <li key={transfer.id}><span className="queue-position">{index + 1}</span><span><strong>{transfer.game.title}</strong><small>{actionLabel(transfer.kind)}</small></span></li>)}</ol></section>;
 }
 function EmptyState({ title, text, action }: { title: string; text: string; action: string }) { return <section className="empty-state"><div className="empty-mark" aria-hidden="true">N</div><h2>{title}</h2><p>{text}</p><button className="primary-button" type="button">{action}</button></section>; }
 function Settings() {
