@@ -363,13 +363,18 @@ function Library({ accessToken, onDownload, runningGameIds }: { accessToken: str
     setInstallError("");
     setInstallingId(game.id);
     setDownloadProgress(null);
-    startDownload(game, "Updating before launch");
+    startDownload(game, "Checking for updates");
     try {
-      const response = await fetch(`${LIBRARY_API_URL}/${game.id}/manifest`, { headers: { Authorization: `Bearer ${accessToken}` } });
-      if (!response.ok) throw new Error("We could not check this game for updates.");
-      const manifest = await response.json();
-      const updateResult = await invoke<{ version: string; changedFiles: number }>("update_game", { manifestJson: JSON.stringify(manifest), installRoot: await installRoot(), downloadLimitMbps: configuredDownloadLimitMbps() });
-      if (updateResult.changedFiles) setUpdateStatus((current) => ({ ...current, [game.id]: `Updated to ${updateResult.version}` }));
+      try {
+        const response = await fetch(`${LIBRARY_API_URL}/${game.id}/manifest`, { headers: { Authorization: `Bearer ${accessToken}` } });
+        if (!response.ok) throw new Error("We could not check this game for updates.");
+        const manifest = await response.json();
+        const updateResult = await invoke<{ version: string; changedFiles: number }>("update_game", { manifestJson: JSON.stringify(manifest), installRoot: await installRoot(), downloadLimitMbps: configuredDownloadLimitMbps() });
+        if (updateResult.changedFiles) setUpdateStatus((current) => ({ ...current, [game.id]: `Updated to ${updateResult.version}` }));
+      } catch (error) {
+        if (!(error instanceof TypeError)) throw error;
+        setUpdateStatus((current) => ({ ...current, [game.id]: "Offline - starting the installed version." }));
+      }
       await invoke("launch_game", { gameId: game.id, installRoot: await installRoot(), launchArguments: parseLaunchOptions(launchOptions[game.id] ?? "") });
     } catch (error) {
       setInstallError(error instanceof Error ? error.message : "We could not launch this game.");
