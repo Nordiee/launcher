@@ -5,7 +5,11 @@ import { applyAvailableUpdate, type UpdateState } from "./updates";
 
 type View = "Home" | "Library" | "Downloads" | "Settings";
 type AuthMode = "sign-in" | "sign-up";
-type Session = { displayName: string; email: string };
+type Session = { displayName: string; email: string; accessToken: string; refreshToken: string };
+type AuthResponse = { accessToken: string; refreshToken: string; username: string; email: string };
+
+const API_BASE_URL = "https://api.nordiee.com/api/v1/auth";
+const SESSION_STORAGE_KEY = "nordiee.account-session.v1";
 
 const navigation: { label: View; icon: ReactNode }[] = [
   { label: "Home", icon: <HomeIcon /> },
@@ -13,14 +17,62 @@ const navigation: { label: View; icon: ReactNode }[] = [
   { label: "Downloads", icon: <DownloadIcon /> },
 ];
 
+function toSession(response: AuthResponse): Session {
+  return { displayName: response.username, email: response.email, accessToken: response.accessToken, refreshToken: response.refreshToken };
+}
+
+function readStoredSession(): Session | null {
+  try {
+    const value = localStorage.getItem(SESSION_STORAGE_KEY);
+    if (!value) return null;
+    const session = JSON.parse(value) as Partial<Session>;
+    if (!session.displayName || !session.email || !session.accessToken || !session.refreshToken) return null;
+    return session as Session;
+  } catch {
+    return null;
+  }
+}
+
+function persistSession(session: Session) { localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session)); }
+function clearStoredSession() { localStorage.removeItem(SESSION_STORAGE_KEY); }
+
 export default function App() {
   const [session, setSession] = useState<Session | null>(null);
   const [updateState, setUpdateState] = useState<UpdateState>("checking");
+  const [sessionReady, setSessionReady] = useState(false);
   useEffect(() => { void applyAvailableUpdate(setUpdateState); }, []);
-  return <div className="app-window"><Titlebar />{updateState !== "ready" ? <UpdateGate state={updateState} /> : session ? <Launcher session={session} onLogOff={() => setSession(null)} /> : <AuthScreen onSession={setSession} />}</div>;
+  useEffect(() => {
+    const restoreSession = async () => {
+      const stored = readStoredSession();
+      if (!stored) { setSessionReady(true); return; }
+      try {
+        const response = await fetch(`${API_BASE_URL}/refresh`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ refreshToken: stored.refreshToken }) });
+        const body = await response.json() as AuthResponse & { error?: string };
+        if (!response.ok) throw new Error(body.error ?? "Session expired");
+        const nextSession = toSession(body);
+        persistSession(nextSession);
+        setSession(nextSession);
+      } catch {
+        clearStoredSession();
+      } finally {
+        setSessionReady(true);
+      }
+    };
+    void restoreSession();
+  }, []);
+  const signOut = async () => {
+    const currentSession = session;
+    clearStoredSession();
+    setSession(null);
+    if (!currentSession) return;
+    void fetch(`${API_BASE_URL}/logout`, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${currentSession.accessToken}` }, body: JSON.stringify({ refreshToken: currentSession.refreshToken }) });
+  };
+  const startSession = (nextSession: Session) => { persistSession(nextSession); setSession(nextSession); };
+  return <div className="app-window"><Titlebar />{updateState !== "ready" ? <UpdateGate state={updateState} /> : !sessionReady ? <StartupGate /> : session ? <Launcher session={session} onLogOff={signOut} /> : <AuthScreen onSession={startSession} />}</div>;
 }
 
 function UpdateGate({ state }: { state: UpdateState }) { return <main className="update-gate"><img src="/logo.svg" alt="Nordiee" /><div className="update-spinner" aria-hidden="true" /><h1>{state === "checking" ? "Checking for updates" : "Updating Nordiee"}</h1><p>{state === "checking" ? "Making sure you are on the latest version." : "Installing the latest version. Nordiee will reopen automatically."}</p></main>; }
+function StartupGate() { return <main className="update-gate"><img src="/logo.svg" alt="Nordiee" /><div className="update-spinner" aria-hidden="true" /><h1>Restoring your session</h1><p>Checking your Nordiee account securely.</p></main>; }
 
 function Titlebar() {
   const appWindow = getCurrentWindow();
@@ -43,10 +95,10 @@ function AuthScreen({ onSession }: { onSession: (session: Session) => void }) {
     const data = new FormData(event.currentTarget);
     const payload = { email: String(data.get("email")), password: String(data.get("password")), username: mode === "sign-up" ? String(data.get("display-name")) : undefined };
     try {
-      const response = await fetch(`https://api.nordiee.com/api/v1/auth/${mode === "sign-in" ? "login" : "signup"}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
-      const body = await response.json();
+      const response = await fetch(`${API_BASE_URL}/${mode === "sign-in" ? "login" : "signup"}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+      const body = await response.json() as AuthResponse & { error?: string };
       if (!response.ok) throw new Error(body.error ?? "Unable to authenticate");
-      onSession({ displayName: body.username, email: body.email });
+      onSession(toSession(body));
     } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to reach Nordiee accounts."); }
   };
   return <main className="auth-shell">
