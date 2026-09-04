@@ -1,11 +1,12 @@
-import { FormEvent, useEffect, useState, type ReactNode } from "react";
+import { FormEvent, useCallback, useEffect, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { ArrowRightIcon, ChevronDownIcon, CloseIcon, DownloadIcon, HomeIcon, LibraryIcon, MaximizeIcon, MinimizeIcon, PauseIcon, PlayIcon, PlusIcon, SettingsIcon, TrashIcon } from "./Icons";
+import { ArrowRightIcon, BellIcon, ChevronDownIcon, CloseIcon, DownloadIcon, HomeIcon, LibraryIcon, MaximizeIcon, MinimizeIcon, PauseIcon, PlayIcon, PlusIcon, SettingsIcon, TrashIcon } from "./Icons";
 import { activeAccountEmail, clearActiveAccount, getAccountSession, listSavedAccounts, migrateLegacyAccounts, removeSavedAccount, saveAccountSession, type AccountSecret, type SavedAccount } from "./accountStore";
 import { readLibraryCache, saveLibraryCache, type LibraryGame } from "./libraryCache";
 import { applyAvailableUpdate, type UpdateState } from "./updates";
+import { readNotifications, saveNotifications, type LauncherNotification } from "./notificationStore";
 
 type View = "Home" | "Library" | "Downloads" | "Settings";
 type AuthMode = "sign-in" | "sign-up";
@@ -15,6 +16,7 @@ type AccessView = "accounts" | "credentials";
 type VerificationState = "verifying" | "verified" | "repair";
 type DownloadActivity = { gameId: string; title: string; phase: string; downloadedBytes?: number; totalBytes?: number; speedBytesPerSecond?: number; sampledAt?: number };
 type DiagnosticResult = "idle" | "checking" | "pass" | "fail";
+type NotificationKind = LauncherNotification["kind"];
 
 const API_BASE_URL = "https://api.nordiee.com/api/v1/auth";
 const LIBRARY_API_URL = "https://api.nordiee.com/api/v1/library";
@@ -41,6 +43,14 @@ const navigation: { label: View; icon: ReactNode }[] = [
 
 function toSession(response: AuthResponse): Session {
   return { displayName: response.username, email: response.email, accessToken: response.accessToken, refreshToken: response.refreshToken };
+}
+
+function notificationTime(createdAt: number) {
+  const elapsed = Math.max(0, Date.now() - createdAt);
+  if (elapsed < 60_000) return "Just now";
+  if (elapsed < 3_600_000) return `${Math.floor(elapsed / 60_000)}m ago`;
+  if (elapsed < 86_400_000) return `${Math.floor(elapsed / 3_600_000)}h ago`;
+  return `${Math.floor(elapsed / 86_400_000)}d ago`;
 }
 
 export default function App() {
@@ -175,6 +185,19 @@ function Launcher({ session, onSwitchAccount, onLogOff, onRemoveAccount }: { ses
   const [download, setDownload] = useState<DownloadActivity | null>(null);
   const [downloadsPaused, setDownloadsPaused] = useState(false);
   const [runningGameIds, setRunningGameIds] = useState<string[]>([]);
+  const [notifications, setNotifications] = useState<LauncherNotification[]>(readNotifications);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const addNotification = useCallback((title: string, message: string, kind: NotificationKind = "info") => setNotifications((current) => {
+    const next = [{ id: crypto.randomUUID(), title, message, kind, createdAt: Date.now(), read: false }, ...current].slice(0, 30);
+    saveNotifications(next);
+    return next;
+  }), []);
+  const markNotificationsRead = useCallback(() => setNotifications((current) => {
+    const next = current.map((notification) => ({ ...notification, read: true }));
+    saveNotifications(next);
+    return next;
+  }), []);
+  const clearNotifications = useCallback(() => { setNotifications([]); saveNotifications([]); }, []);
   useEffect(() => {
     const unlisten = listen<{ gameId: string; downloadedBytes: number; totalBytes: number }>("game-download-progress", (event) => setDownload((current) => {
       const now = Date.now();
@@ -197,9 +220,15 @@ function Launcher({ session, onSwitchAccount, onLogOff, onRemoveAccount }: { ses
     return () => { void unlisten.then((cleanup) => cleanup()); };
   }, []);
   useEffect(() => {
-    const unlisten = listen<{ gameId: string }>("game-download-complete", (event) => setDownload((current) => current?.gameId === event.payload.gameId ? null : current));
+    const unlisten = listen<{ gameId: string }>("game-download-complete", (event) => setDownload((current) => {
+      if (current?.gameId === event.payload.gameId) {
+        addNotification("Download complete", `${current.title} is ready in your library.`, "success");
+        return null;
+      }
+      return current;
+    }));
     return () => { void unlisten.then((cleanup) => cleanup()); };
-  }, []);
+  }, [addNotification]);
   const toggleDownloadsPaused = async () => {
     const next = !downloadsPaused;
     setDownloadsPaused(next);
@@ -207,14 +236,24 @@ function Launcher({ session, onSwitchAccount, onLogOff, onRemoveAccount }: { ses
     catch { setDownloadsPaused(!next); }
   };
   const remove = async () => { if (!window.confirm(`Remove ${session.displayName} from this computer?`)) return; await onRemoveAccount(session); };
-  return <div className="launcher-shell"><a className="skip-link" href="#main-content">Skip to content</a><aside className="sidebar" aria-label="Launcher navigation"><div className="sidebar-brand"><img src="/logo.svg" alt="Nordiee" /><span>NORDIEE</span></div><nav className="navigation">{navigation.map((item) => <button className={view === item.label ? "nav-item active" : "nav-item"} key={item.label} onClick={() => setView(item.label)} type="button"><span className="nav-icon">{item.icon}</span>{item.label}</button>)}</nav><div className="sidebar-bottom"><button className={view === "Settings" ? "nav-item active" : "nav-item"} onClick={() => setView("Settings")} type="button"><span className="nav-icon"><SettingsIcon /></span>Settings</button><div className="account-menu"><button className="profile" type="button" aria-expanded={accountOpen} aria-haspopup="menu" onClick={() => setAccountOpen(!accountOpen)}><span className="avatar">{session.displayName[0]?.toUpperCase()}</span><span><strong>{session.displayName}</strong><small>{session.email}</small></span><ChevronDownIcon size={15} /></button>{accountOpen && <div className="account-popover" role="menu"><button type="button" role="menuitem" onClick={onSwitchAccount}>Switch account</button><button type="button" role="menuitem" onClick={() => void onLogOff()}>Log off</button><button className="danger-action" type="button" role="menuitem" onClick={() => void remove()}>Remove this account</button></div>}</div></div></aside><main id="main-content" className="content" tabIndex={-1}><header className="topbar"><div><p className="eyebrow">NORDIEE LAUNCHER</p><h1>{view}</h1></div><div className="service-status"><span /> All systems operational</div></header>{view === "Home" && <Home download={download} onOpenLibrary={() => setView("Library")} onOpenDownloads={() => setView("Downloads")} />}{view === "Library" && <Library accessToken={session.accessToken} onDownload={setDownload} runningGameIds={runningGameIds} />}{view === "Downloads" && <Downloads download={download} paused={downloadsPaused} onTogglePaused={() => void toggleDownloadsPaused()} />}{view === "Settings" && <Settings />}</main></div>;
+  const unreadCount = notifications.filter((notification) => !notification.read).length;
+  return <div className="launcher-shell"><a className="skip-link" href="#main-content">Skip to content</a><aside className="sidebar" aria-label="Launcher navigation"><div className="sidebar-brand"><img src="/logo.svg" alt="Nordiee" /><span>NORDIEE</span></div><nav className="navigation">{navigation.map((item) => <button className={view === item.label ? "nav-item active" : "nav-item"} key={item.label} onClick={() => setView(item.label)} type="button"><span className="nav-icon">{item.icon}</span>{item.label}</button>)}</nav><div className="sidebar-bottom"><button className={view === "Settings" ? "nav-item active" : "nav-item"} onClick={() => setView("Settings")} type="button"><span className="nav-icon"><SettingsIcon /></span>Settings</button><div className="account-menu"><button className="profile" type="button" aria-expanded={accountOpen} aria-haspopup="menu" onClick={() => setAccountOpen(!accountOpen)}><span className="avatar">{session.displayName[0]?.toUpperCase()}</span><span><strong>{session.displayName}</strong><small>{session.email}</small></span><ChevronDownIcon size={15} /></button>{accountOpen && <div className="account-popover" role="menu"><button type="button" role="menuitem" onClick={onSwitchAccount}>Switch account</button><button type="button" role="menuitem" onClick={() => void onLogOff()}>Log off</button><button className="danger-action" type="button" role="menuitem" onClick={() => void remove()}>Remove this account</button></div>}</div></div></aside><main id="main-content" className="content" tabIndex={-1}><header className="topbar"><div><p className="eyebrow">NORDIEE LAUNCHER</p><h1>{view}</h1></div><div className="topbar-actions"><div className="service-status"><span /> All systems operational</div><NotificationCenter notifications={notifications} open={notificationsOpen} unreadCount={unreadCount} onToggle={() => { const next = !notificationsOpen; setNotificationsOpen(next); if (next) markNotificationsRead(); }} onClear={clearNotifications} /></div></header>{view === "Home" && <Home download={download} onOpenLibrary={() => setView("Library")} onOpenDownloads={() => setView("Downloads")} />}{view === "Library" && <Library accessToken={session.accessToken} onDownload={setDownload} onNotify={addNotification} runningGameIds={runningGameIds} />}{view === "Downloads" && <Downloads download={download} paused={downloadsPaused} onTogglePaused={() => void toggleDownloadsPaused()} />}{view === "Settings" && <Settings />}</main></div>;
+}
+
+function NotificationCenter({ notifications, open, unreadCount, onToggle, onClear }: { notifications: LauncherNotification[]; open: boolean; unreadCount: number; onToggle: () => void; onClear: () => void }) {
+  useEffect(() => {
+    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === "Escape" && open) onToggle(); };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [open, onToggle]);
+  return <div className="notification-menu"><button className="notification-trigger" type="button" aria-label={unreadCount ? `${unreadCount} unread notifications` : "Notifications"} aria-expanded={open} aria-haspopup="dialog" onClick={onToggle}><BellIcon />{unreadCount > 0 && <span className="notification-badge" aria-hidden="true">{unreadCount > 9 ? "9+" : unreadCount}</span>}</button>{open && <section className="notification-popover" role="dialog" aria-label="Notifications"><header><div><p className="panel-label">NOTIFICATIONS</p><h2>Activity</h2></div>{notifications.length > 0 && <button className="text-button" type="button" onClick={onClear}>Clear all</button>}</header>{notifications.length ? <div className="notification-list">{notifications.map((notification) => <article className={`notification-item ${notification.kind}`} key={notification.id}><div><strong>{notification.title}</strong><p>{notification.message}</p></div><time dateTime={new Date(notification.createdAt).toISOString()}>{notificationTime(notification.createdAt)}</time></article>)}</div> : <div className="notification-empty"><BellIcon size={22} /><p>No activity yet</p><small>Completed downloads and important launcher events will appear here.</small></div>}</section>}</div>;
 }
 
 function Home({ download, onOpenLibrary, onOpenDownloads }: { download: DownloadActivity | null; onOpenLibrary: () => void; onOpenDownloads: () => void }) {
   const percentage = download?.totalBytes ? Math.min(100, Math.round(((download.downloadedBytes ?? 0) / download.totalBytes) * 100)) : null;
   return <section className="home-grid" aria-label="Launcher overview"><article className="welcome-card"><p className="eyebrow">NORDIEE LAUNCHER</p><h2>Your games, one place.</h2><p>Library, updates and verified installs are ready from one focused workspace.</p><button className="primary-button" type="button" onClick={onOpenLibrary}>View your library</button></article><article className="panel home-download"><p className="panel-label">DOWNLOADS</p>{download ? <><div className="home-download-heading"><h3>{download.title}</h3><strong>{percentage === null ? "Starting" : `${percentage}%`}</strong></div><div className="download-progress" role="progressbar" aria-label={`${download.title} download progress`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={percentage ?? undefined}><span style={{ width: `${percentage ?? 4}%` }} /></div><button className="text-button" type="button" onClick={onOpenDownloads}>Open Downloads</button></> : <><h3>Nothing in queue</h3><p>Game installs, updates and repairs will appear here.</p></>}</article><article className="panel full-width"><div className="panel-heading"><div><p className="panel-label">LIBRARY</p><h3>Ready when you are</h3></div><button className="text-button" type="button" onClick={onOpenLibrary}>Open Library</button></div><p>Installed games stay updated and can be verified or repaired from your library.</p></article></section>;
 }
-function Library({ accessToken, onDownload, runningGameIds }: { accessToken: string; onDownload: (download: DownloadActivity | null) => void; runningGameIds: string[] }) {
+function Library({ accessToken, onDownload, onNotify, runningGameIds }: { accessToken: string; onDownload: (download: DownloadActivity | null) => void; onNotify: (title: string, message: string, kind?: NotificationKind) => void; runningGameIds: string[] }) {
   const email = activeAccountEmail() ?? "";
   const cachedLibrary = readLibraryCache(email);
   const [status, setStatus] = useState<"loading" | "ready" | "offline" | "error">("loading");
@@ -273,7 +312,10 @@ function Library({ accessToken, onDownload, runningGameIds }: { accessToken: str
               if (!response.ok) continue;
               const manifest = await response.json();
               const result = await invoke<{ version: string; changedFiles: number }>("update_game", { manifestJson: JSON.stringify(manifest), installRoot: root, downloadLimitMbps: configuredDownloadLimitMbps() });
-              if (active && result.changedFiles) setUpdateStatus((current) => ({ ...current, [game.id]: `Updated to ${result.version}` }));
+              if (active && result.changedFiles) {
+                setUpdateStatus((current) => ({ ...current, [game.id]: `Updated to ${result.version}` }));
+                onNotify("Game updated", `${game.title} updated to version ${result.version}.`, "success");
+              }
             } catch {
               continue;
             }
@@ -297,8 +339,11 @@ function Library({ accessToken, onDownload, runningGameIds }: { accessToken: str
       const manifest = await response.json();
       await invoke("install_game", { manifestJson: JSON.stringify(manifest), installRoot: await installRoot(), downloadLimitMbps: configuredDownloadLimitMbps() });
       setInstalledIds((current) => [...new Set([...current, game.id])]);
+      onNotify("Game installed", `${game.title} is ready to play.`, "success");
     } catch (error) {
-      setInstallError(error instanceof Error ? error.message : "We could not install this game.");
+      const message = error instanceof Error ? error.message : "We could not install this game.";
+      setInstallError(message);
+      onNotify("Install failed", `${game.title}: ${message}`, "error");
     } finally {
       setInstallingId(null);
       setDownloadProgress(null);
@@ -311,6 +356,7 @@ function Library({ accessToken, onDownload, runningGameIds }: { accessToken: str
     try {
       const result = await invoke<{ verified: boolean }>("verify_game", { gameId: game.id, installRoot: await installRoot() });
       setVerification((current) => ({ ...current, [game.id]: result.verified ? "verified" : "repair" }));
+      onNotify(result.verified ? "Files verified" : "Repair required", result.verified ? `${game.title} files are healthy.` : `${game.title} has files that need repair.`, result.verified ? "success" : "error");
     } catch (error) {
       setVerification((current) => { const next = { ...current }; delete next[game.id]; return next; });
       setInstallError(error instanceof Error ? error.message : "We could not verify this game.");
@@ -324,8 +370,11 @@ function Library({ accessToken, onDownload, runningGameIds }: { accessToken: str
     try {
       await invoke("repair_game", { gameId: game.id, installRoot: await installRoot(), downloadLimitMbps: configuredDownloadLimitMbps() });
       setVerification((current) => ({ ...current, [game.id]: "verified" }));
+      onNotify("Files repaired", `${game.title} is ready to play.`, "success");
     } catch (error) {
-      setInstallError(error instanceof Error ? error.message : "We could not repair this game.");
+      const message = error instanceof Error ? error.message : "We could not repair this game.";
+      setInstallError(message);
+      onNotify("Repair failed", `${game.title}: ${message}`, "error");
     } finally {
       setInstallingId(null);
       setDownloadProgress(null);
@@ -370,14 +419,19 @@ function Library({ accessToken, onDownload, runningGameIds }: { accessToken: str
         if (!response.ok) throw new Error("We could not check this game for updates.");
         const manifest = await response.json();
         const updateResult = await invoke<{ version: string; changedFiles: number }>("update_game", { manifestJson: JSON.stringify(manifest), installRoot: await installRoot(), downloadLimitMbps: configuredDownloadLimitMbps() });
-        if (updateResult.changedFiles) setUpdateStatus((current) => ({ ...current, [game.id]: `Updated to ${updateResult.version}` }));
+        if (updateResult.changedFiles) {
+          setUpdateStatus((current) => ({ ...current, [game.id]: `Updated to ${updateResult.version}` }));
+          onNotify("Game updated", `${game.title} updated to version ${updateResult.version}.`, "success");
+        }
       } catch (error) {
         if (!(error instanceof TypeError)) throw error;
         setUpdateStatus((current) => ({ ...current, [game.id]: "Offline - starting the installed version." }));
       }
       await invoke("launch_game", { gameId: game.id, installRoot: await installRoot(), launchArguments: parseLaunchOptions(launchOptions[game.id] ?? "") });
     } catch (error) {
-      setInstallError(error instanceof Error ? error.message : "We could not launch this game.");
+      const message = error instanceof Error ? error.message : "We could not launch this game.";
+      setInstallError(message);
+      onNotify("Could not start game", `${game.title}: ${message}`, "error");
     } finally {
       setInstallingId(null);
       setDownloadProgress(null);
@@ -396,8 +450,11 @@ function Library({ accessToken, onDownload, runningGameIds }: { accessToken: str
       const result = await invoke<{ version: string; changedFiles: number }>("update_game", { manifestJson: JSON.stringify(manifest), installRoot: await installRoot(), downloadLimitMbps: configuredDownloadLimitMbps() });
       setUpdateStatus((current) => ({ ...current, [game.id]: result.changedFiles ? `Updated to ${result.version}` : "Already up to date." }));
       setVerification((current) => ({ ...current, [game.id]: "verified" }));
+      onNotify(result.changedFiles ? "Game updated" : "Game is up to date", result.changedFiles ? `${game.title} updated to version ${result.version}.` : `${game.title} already has the latest files.`, "success");
     } catch (error) {
-      setInstallError(error instanceof Error ? error.message : "We could not update this game.");
+      const message = error instanceof Error ? error.message : "We could not update this game.";
+      setInstallError(message);
+      onNotify("Update failed", `${game.title}: ${message}`, "error");
     } finally {
       setInstallingId(null);
       setDownloadProgress(null);
