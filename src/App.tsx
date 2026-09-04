@@ -255,7 +255,11 @@ function Launcher({ session, onSwitchAccount, onLogOff, onRemoveAccount }: { ses
     }
   }, [download, downloadsPaused, pauseDownloadsWhilePlaying, runningGameIds.length]);
   useEffect(() => listenForTransferQueue(setQueuedTransfers), []);
-  useEffect(() => setQueuedTransfers(activateTransferQueue(session.email)), [session.email]);
+  useEffect(() => {
+    const restoredQueue = activateTransferQueue(session.email);
+    setQueuedTransfers(restoredQueue);
+    if (restoredQueue.length) addNotification("Transfer queue restored", `${restoredQueue.length} ${restoredQueue.length === 1 ? "game is" : "games are"} ready to resume.`, "info");
+  }, [addNotification, session.email]);
   useEffect(() => setRecentGames(readRecentGames(session.email)), [session.email]);
   useEffect(() => setFavoriteGameIds(readLibraryFavorites(session.email)), [session.email]);
   useEffect(() => setPlaytimeByGame(readPlaytime(session.email)), [session.email]);
