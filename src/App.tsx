@@ -177,6 +177,10 @@ function Launcher({ session, onSwitchAccount, onLogOff, onRemoveAccount }: { ses
     });
     return () => { void unlisten.then((cleanup) => cleanup()); };
   }, []);
+  useEffect(() => {
+    const unlisten = listen<{ gameId: string }>("game-download-complete", (event) => setDownload((current) => current?.gameId === event.payload.gameId ? null : current));
+    return () => { void unlisten.then((cleanup) => cleanup()); };
+  }, []);
   const toggleDownloadsPaused = async () => {
     const next = !downloadsPaused;
     setDownloadsPaused(next);
@@ -268,6 +272,7 @@ function Library({ accessToken, onDownload, runningGameIds }: { accessToken: str
     } finally {
       setInstallingId(null);
       setDownloadProgress(null);
+      onDownload(null);
     }
   };
   const verify = async (game: LibraryGame) => {
@@ -294,6 +299,7 @@ function Library({ accessToken, onDownload, runningGameIds }: { accessToken: str
     } finally {
       setInstallingId(null);
       setDownloadProgress(null);
+      onDownload(null);
     }
   };
   const uninstall = async (game: LibraryGame) => {
@@ -327,6 +333,7 @@ function Library({ accessToken, onDownload, runningGameIds }: { accessToken: str
     } finally {
       setInstallingId(null);
       setDownloadProgress(null);
+      onDownload(null);
     }
   };
   const update = async (game: LibraryGame) => {
@@ -346,6 +353,7 @@ function Library({ accessToken, onDownload, runningGameIds }: { accessToken: str
     } finally {
       setInstallingId(null);
       setDownloadProgress(null);
+      onDownload(null);
     }
   };
   if (status === "loading") return <section className="library-state" aria-live="polite"><span className="library-loader" aria-hidden="true" /><h2>Loading your library</h2><p>Fetching the games connected to this account.</p></section>;
@@ -354,6 +362,7 @@ function Library({ accessToken, onDownload, runningGameIds }: { accessToken: str
   if (!games.length) return <>{offlineNotice}<section className="empty-state"><div className="empty-mark" aria-hidden="true">N</div><h2>Your library is ready</h2><p>Games connected to your Nordiee account will appear here.</p></section></>;
   return <>{offlineNotice}{installError && <p className="install-error" role="alert">{installError}</p>}<section className="library-grid" aria-label="Your game library">{games.map((game) => {
     const isInstalling = installingId === game.id;
+    const transferInProgress = installingId !== null;
     const isInstalled = installedIds.includes(game.id) || game.installState === "INSTALLED";
     const isRunning = runningGameIds.includes(game.id);
     const percentage = isInstalling && downloadProgress?.gameId === game.id && downloadProgress.totalBytes ? Math.round((downloadProgress.downloadedBytes / downloadProgress.totalBytes) * 100) : null;
@@ -362,7 +371,7 @@ function Library({ accessToken, onDownload, runningGameIds }: { accessToken: str
     const detail = isInstalling && percentage !== null ? `${percentage}% downloaded` : updateStatus[game.id] ?? (checkState === "verified" ? "All installed files verified." : checkState === "repair" ? "One or more files need repair." : game.installSizeBytes ? `${Math.round(game.installSizeBytes / 1_000_000_000)} GB` : "Size will be available soon");
     const primaryLabel = !isInstalled ? isInstalling ? percentage !== null ? `Downloading ${percentage}%` : "Preparing" : "Install" : checkState === "verifying" ? "Verifying" : checkState === "repair" ? isInstalling ? percentage !== null ? `Repairing ${percentage}%` : "Preparing repair" : "Repair files" : "Verify files";
     const primaryAction = () => { if (!isInstalled) return install(game); if (checkState === "repair") return repair(game); return verify(game); };
-    return <article className="library-card" key={game.id}><div className="library-cover" aria-hidden="true">N</div><div><p className="panel-label">{statusLabel}</p><h2>{game.title}</h2><p>{detail}</p><div className="library-actions">{isInstalled && <button className="library-action play-action" type="button" disabled={isInstalling || isRunning || checkState === "repair"} onClick={() => void play(game)}>{isRunning ? "Running" : isInstalling ? percentage !== null ? `Updating ${percentage}%` : "Checking update" : "Play"}</button>}{isInstalled && <button className="library-action" type="button" disabled={isInstalling || isRunning || checkState === "repair"} onClick={() => void update(game)}>Check update</button>}<button className="library-action" type="button" disabled={isInstalling || isRunning || checkState === "verifying"} onClick={() => void primaryAction()}>{primaryLabel}</button>{isInstalled && <button className="library-action uninstall-action" type="button" disabled={isInstalling || isRunning} onClick={() => void uninstall(game)}>Uninstall</button>}</div></div></article>;
+    return <article className="library-card" key={game.id}><div className="library-cover" aria-hidden="true">N</div><div><p className="panel-label">{statusLabel}</p><h2>{game.title}</h2><p>{detail}</p><div className="library-actions">{isInstalled && <button className="library-action play-action" type="button" disabled={transferInProgress || isRunning || checkState === "repair"} onClick={() => void play(game)}>{isRunning ? "Running" : isInstalling ? percentage !== null ? `Updating ${percentage}%` : "Checking update" : "Play"}</button>}{isInstalled && <button className="library-action" type="button" disabled={transferInProgress || isRunning || checkState === "repair"} onClick={() => void update(game)}>Check update</button>}<button className="library-action" type="button" disabled={transferInProgress || isRunning || checkState === "verifying"} onClick={() => void primaryAction()}>{primaryLabel}</button>{isInstalled && <button className="library-action uninstall-action" type="button" disabled={transferInProgress || isRunning} onClick={() => void uninstall(game)}>Uninstall</button>}</div></div></article>;
   })}</section></>;
 }
 function Downloads({ download, paused, onTogglePaused }: { download: DownloadActivity | null; paused: boolean; onTogglePaused: () => void }) {
