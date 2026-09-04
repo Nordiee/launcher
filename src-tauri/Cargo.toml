@@ -1,6 +1,6 @@
 [package]
 name = "nordiee-launcher"
-version = "0.1.19"
+version = "0.1.20"
 description = "Nordiee desktop game launcher"
 authors = ["Nordiee"]
 edition = "2021"

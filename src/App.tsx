@@ -189,14 +189,28 @@ function Library({ accessToken }: { accessToken: string }) {
       try {
         const root = await installRoot();
         const checks = await Promise.all(games.map(async (game) => ({ id: game.id, version: await invoke<string | null>("installed_game_version", { gameId: game.id, installRoot: root }) })));
-        if (active) setInstalledIds(checks.filter((check) => check.version).map((check) => check.id));
+        const installedGameIds = checks.filter((check) => check.version).map((check) => check.id);
+        if (active) setInstalledIds(installedGameIds);
+        if (localStorage.getItem("nordiee.autoUpdateGames") !== "false") {
+          for (const game of games.filter((game) => installedGameIds.includes(game.id))) {
+            try {
+              const response = await fetch(`${LIBRARY_API_URL}/${game.id}/manifest`, { headers: { Authorization: `Bearer ${accessToken}` } });
+              if (!response.ok) continue;
+              const manifest = await response.json();
+              const result = await invoke<{ version: string; changedFiles: number }>("update_game", { manifestJson: JSON.stringify(manifest), installRoot: root });
+              if (active && result.changedFiles) setUpdateStatus((current) => ({ ...current, [game.id]: `Updated to ${result.version}` }));
+            } catch {
+              continue;
+            }
+          }
+        }
       } catch {
         if (active) setInstalledIds([]);
       }
     };
     if (games.length) void findInstalledGames();
     return () => { active = false; };
-  }, [games]);
+  }, [accessToken, games]);
   const install = async (game: LibraryGame) => {
     setInstallError("");
     setInstallingId(game.id);
@@ -308,7 +322,9 @@ function Library({ accessToken }: { accessToken: string }) {
 function EmptyState({ title, text, action }: { title: string; text: string; action: string }) { return <section className="empty-state"><div className="empty-mark" aria-hidden="true">N</div><h2>{title}</h2><p>{text}</p><button className="primary-button" type="button">{action}</button></section>; }
 function Settings() {
   const [installRootValue, setInstallRootValue] = useState(() => localStorage.getItem("nordiee.installRoot") ?? "");
+  const [autoUpdateGames, setAutoUpdateGames] = useState(() => localStorage.getItem("nordiee.autoUpdateGames") !== "false");
   useEffect(() => { if (!installRootValue) void installRoot().then(setInstallRootValue); }, [installRootValue]);
   const saveInstallRoot = (value: string) => { setInstallRootValue(value); if (value.trim()) localStorage.setItem("nordiee.installRoot", value.trim()); else localStorage.removeItem("nordiee.installRoot"); };
-  return <section className="settings"><article className="panel"><p className="panel-label">LAUNCHER</p><h3>Application settings</h3><div className="setting-row"><div><strong>Launch at startup</strong><small>Start Nordiee when you sign in to Windows.</small></div><button className="toggle" type="button" aria-label="Launch at startup, disabled" /></div><div className="setting-row"><div><strong>Game install location</strong><small>Games install beside Nordiee in the NordieeApps folder by default.</small></div><label className="path-field"><span className="sr-only">Game install location</span><input value={installRootValue} onChange={(event) => saveInstallRoot(event.target.value)} spellCheck="false" /></label></div><div className="setting-row"><div><strong>Download limit</strong><small>No limit configured.</small></div><button className="select-button" type="button">Unlimited</button></div></article></section>;
+  const setAutoUpdate = (enabled: boolean) => { setAutoUpdateGames(enabled); localStorage.setItem("nordiee.autoUpdateGames", String(enabled)); };
+  return <section className="settings"><article className="panel"><p className="panel-label">LAUNCHER</p><h3>Application settings</h3><div className="setting-row"><div><strong>Launch at startup</strong><small>Start Nordiee when you sign in to Windows.</small></div><button className="toggle" type="button" aria-label="Launch at startup, disabled" /></div><div className="setting-row"><div><strong>Game install location</strong><small>Games install beside Nordiee in the NordieeApps folder by default.</small></div><label className="path-field"><span className="sr-only">Game install location</span><input value={installRootValue} onChange={(event) => saveInstallRoot(event.target.value)} spellCheck="false" /></label></div><div className="setting-row"><div><strong>Automatically update games</strong><small>Check installed games when Nordiee opens and download changed files.</small></div><button className={autoUpdateGames ? "toggle enabled" : "toggle"} type="button" aria-pressed={autoUpdateGames} aria-label="Automatically update games" onClick={() => setAutoUpdate(!autoUpdateGames)} /></div><div className="setting-row"><div><strong>Download limit</strong><small>No limit configured.</small></div><button className="select-button" type="button">Unlimited</button></div></article></section>;
 }
