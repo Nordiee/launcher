@@ -127,6 +127,25 @@ async fn verify_game(game_id: String, install_root: String) -> Result<serde_json
     }))
 }
 
+#[tauri::command]
+async fn installed_game_version(game_id: String, install_root: String) -> Result<Option<String>, String> {
+    if !safe_game_id(&game_id) {
+        return Err("The game identifier is invalid.".to_string());
+    }
+    let receipt_path = PathBuf::from(install_root).join(&game_id).join(".nordiee-install.json");
+    let receipt = match tokio::fs::read(receipt_path).await {
+        Ok(receipt) => receipt,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.to_string()),
+    };
+    let manifest: nordiee_core::GameManifest = serde_json::from_slice(&receipt).map_err(|_| "The local installation record is invalid.".to_string())?;
+    manifest.validate().map_err(|error| error.to_string())?;
+    if manifest.game_id != game_id {
+        return Err("The local installation record does not match this game.".to_string());
+    }
+    Ok(Some(manifest.version))
+}
+
 async fn hash_file(path: &Path) -> Result<String, String> {
     let mut file = tokio::fs::File::open(path).await.map_err(|_| "A game file is missing.".to_string())?;
     let mut checksum = Sha256::new();
@@ -157,7 +176,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .invoke_handler(tauri::generate_handler![launcher_version, default_install_root, save_account_secret, load_account_secret, remove_account_secret, install_game, verify_game])
+        .invoke_handler(tauri::generate_handler![launcher_version, default_install_root, save_account_secret, load_account_secret, remove_account_secret, install_game, verify_game, installed_game_version])
         .run(tauri::generate_context!())
         .expect("error while running Nordiee Launcher");
 }

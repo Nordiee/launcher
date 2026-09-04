@@ -12,6 +12,7 @@ type AuthMode = "sign-in" | "sign-up";
 type Session = SavedAccount & AccountSecret;
 type AuthResponse = { accessToken: string; refreshToken: string; username: string; email: string };
 type AccessView = "accounts" | "credentials";
+type VerificationState = "verifying" | "verified" | "repair";
 
 const API_BASE_URL = "https://api.nordiee.com/api/v1/auth";
 const LIBRARY_API_URL = "https://api.nordiee.com/api/v1/library";
@@ -158,6 +159,7 @@ function Library({ accessToken }: { accessToken: string }) {
   const [installingId, setInstallingId] = useState<string | null>(null);
   const [installedIds, setInstalledIds] = useState<string[]>([]);
   const [installError, setInstallError] = useState("");
+  const [verification, setVerification] = useState<Record<string, VerificationState>>({});
   const [downloadProgress, setDownloadProgress] = useState<{ gameId: string; downloadedBytes: number; totalBytes: number } | null>(null);
   const loadLibrary = async () => {
     setStatus("loading");
@@ -180,6 +182,20 @@ function Library({ accessToken }: { accessToken: string }) {
     const unlisten = listen<{ gameId: string; downloadedBytes: number; totalBytes: number }>("game-download-progress", (event) => setDownloadProgress(event.payload));
     return () => { void unlisten.then((cleanup) => cleanup()); };
   }, []);
+  useEffect(() => {
+    let active = true;
+    const findInstalledGames = async () => {
+      try {
+        const root = await installRoot();
+        const checks = await Promise.all(games.map(async (game) => ({ id: game.id, version: await invoke<string | null>("installed_game_version", { gameId: game.id, installRoot: root }) })));
+        if (active) setInstalledIds(checks.filter((check) => check.version).map((check) => check.id));
+      } catch {
+        if (active) setInstalledIds([]);
+      }
+    };
+    if (games.length) void findInstalledGames();
+    return () => { active = false; };
+  }, [games]);
   const install = async (game: LibraryGame) => {
     setInstallError("");
     setInstallingId(game.id);
@@ -197,6 +213,17 @@ function Library({ accessToken }: { accessToken: string }) {
       setDownloadProgress(null);
     }
   };
+  const verify = async (game: LibraryGame) => {
+    setInstallError("");
+    setVerification((current) => ({ ...current, [game.id]: "verifying" }));
+    try {
+      const result = await invoke<{ verified: boolean }>("verify_game", { gameId: game.id, installRoot: await installRoot() });
+      setVerification((current) => ({ ...current, [game.id]: result.verified ? "verified" : "repair" }));
+    } catch (error) {
+      setVerification((current) => { const next = { ...current }; delete next[game.id]; return next; });
+      setInstallError(error instanceof Error ? error.message : "We could not verify this game.");
+    }
+  };
   if (status === "loading") return <section className="library-state" aria-live="polite"><span className="library-loader" aria-hidden="true" /><h2>Loading your library</h2><p>Fetching the games connected to this account.</p></section>;
   if (status === "error") return <section className="library-state"><div className="empty-mark" aria-hidden="true">N</div><h2>We could not load your library</h2><p>Check your connection, then try again.</p><button className="primary-button" type="button" onClick={() => void loadLibrary()}>Try again</button></section>;
   const offlineNotice = status === "offline" ? <p className="offline-notice" role="status">Offline mode - showing the last library saved on this device.</p> : null;
@@ -205,7 +232,8 @@ function Library({ accessToken }: { accessToken: string }) {
     const isInstalling = installingId === game.id;
     const isInstalled = installedIds.includes(game.id) || game.installState === "INSTALLED";
     const percentage = isInstalling && downloadProgress?.gameId === game.id && downloadProgress.totalBytes ? Math.round((downloadProgress.downloadedBytes / downloadProgress.totalBytes) * 100) : null;
-    return <article className="library-card" key={game.id}><div className="library-cover" aria-hidden="true">N</div><div><p className="panel-label">{isInstalled ? "INSTALLED" : isInstalling ? "DOWNLOADING" : game.installState}</p><h2>{game.title}</h2><p>{isInstalling && percentage !== null ? `${percentage}% downloaded` : game.installSizeBytes ? `${Math.round(game.installSizeBytes / 1_000_000_000)} GB` : "Size will be available soon"}</p><button className="library-action" type="button" disabled={isInstalling || isInstalled} onClick={() => void install(game)}>{isInstalled ? "Installed" : isInstalling ? percentage !== null ? `Downloading ${percentage}%` : "Preparing" : "Install"}</button></div></article>;
+    const checkState = verification[game.id];
+    return <article className="library-card" key={game.id}><div className="library-cover" aria-hidden="true">N</div><div><p className="panel-label">{isInstalled ? checkState === "repair" ? "REPAIR REQUIRED" : "INSTALLED" : isInstalling ? "DOWNLOADING" : game.installState}</p><h2>{game.title}</h2><p>{isInstalling && percentage !== null ? `${percentage}% downloaded` : checkState === "verified" ? "All installed files verified." : checkState === "repair" ? "One or more files need repair." : game.installSizeBytes ? `${Math.round(game.installSizeBytes / 1_000_000_000)} GB` : "Size will be available soon"}</p><button className="library-action" type="button" disabled={isInstalling || checkState === "verifying"} onClick={() => void (isInstalled ? verify(game) : install(game))}>{isInstalled ? checkState === "verifying" ? "Verifying" : checkState === "repair" ? "Repair coming next" : "Verify files" : isInstalling ? percentage !== null ? `Downloading ${percentage}%` : "Preparing" : "Install"}</button></div></article>;
   })}</section></>;
 }
 function EmptyState({ title, text, action }: { title: string; text: string; action: string }) { return <section className="empty-state"><div className="empty-mark" aria-hidden="true">N</div><h2>{title}</h2><p>{text}</p><button className="primary-button" type="button">{action}</button></section>; }
