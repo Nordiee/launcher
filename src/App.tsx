@@ -28,6 +28,7 @@ type LibrarySort = "title" | "installed" | "favorites" | "recent" | "playtime";
 const API_BASE_URL = "https://api.nordiee.com/api/v1/auth";
 const LIBRARY_API_URL = "https://api.nordiee.com/api/v1/library";
 const FRIENDS_API_URL = "https://api.nordiee.com/api/v1/friends";
+const PROFILE_API_URL = "https://api.nordiee.com/api/v1/profile";
 const HEALTH_API_URL = "https://api.nordiee.com/health";
 
 async function installRoot() {
@@ -361,7 +362,8 @@ function Home({ download, onClearRecent, playtimeByGame, queuedTransfers, recent
   return <section className="home-grid" aria-label="Launcher overview"><article className="welcome-card"><p className="eyebrow">{recentGame ? "CONTINUE PLAYING" : "NORDIEE LAUNCHER"}</p><h2>{recentGame ? recentGame.title : "Your games, one place."}</h2><p>{recentGame ? `Last played ${lastPlayed}.${playtimeLabel ? ` ${playtimeLabel}.` : ""}` : "Library, updates and verified installs are ready from one focused workspace."}</p><button className="primary-button" type="button" onClick={onOpenLibrary}>{recentGame ? "Continue in library" : "View your library"}</button></article><article className="panel home-download"><p className="panel-label">DOWNLOADS</p>{download ? <><div className="home-download-heading"><h3>{download.title}</h3><strong>{percentage === null ? "Starting" : `${percentage}%`}</strong></div><div className="download-progress" role="progressbar" aria-label={`${download.title} download progress`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={percentage ?? undefined}><span style={{ width: `${percentage ?? 4}%` }} /></div><button className="text-button" type="button" onClick={onOpenDownloads}>Open Downloads</button></> : queuedTransfers.length ? <><h3>{queuedTransfers.length} {queuedTransfers.length === 1 ? "game waiting" : "games waiting"}</h3><p>{queuedTransfers[0].game.title} is next in the transfer queue.</p><button className="text-button" type="button" onClick={onOpenDownloads}>Manage queue</button></> : <><h3>Nothing in queue</h3><p>Game installs, updates and repairs will appear here.</p></>}</article><article className="panel full-width"><div className="panel-heading"><div><p className="panel-label">RECENT GAMES</p><h3>{recentGames.length ? "Your latest launches" : "Ready when you are"}</h3></div><span>{recentGames.length ? <button className="text-button" type="button" onClick={onClearRecent}>Clear recent</button> : null}<button className="text-button" type="button" onClick={onOpenLibrary}>Open Library</button></span></div><p>{recentGames.length ? recentGames.slice(0, 3).map((game) => game.title).join(" • ") : "Installed games stay updated and can be verified or repaired from your library."}</p></article></section>;
 }
 
-type FriendProfile = { id: string; username: string };
+type PresenceStatus = "ONLINE" | "AWAY" | "BUSY" | "INVISIBLE" | "OFFLINE";
+type FriendProfile = { id: string; username: string; presenceStatus: PresenceStatus };
 type IncomingFriendRequest = { id: string; from: FriendProfile; createdAt: string };
 
 function Friends({ accessToken, onBack }: { accessToken: string; onBack: () => void }) {
@@ -371,6 +373,8 @@ function Friends({ accessToken, onBack }: { accessToken: string; onBack: () => v
   const [username, setUsername] = useState("");
   const [message, setMessage] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [presenceStatus, setPresenceStatus] = useState<PresenceStatus>("ONLINE");
+  const [savingPresence, setSavingPresence] = useState(false);
   useEffect(() => {
     const page = document.querySelector<HTMLElement>(".friends-page");
     page?.setAttribute("id", "friends-content");
@@ -379,10 +383,12 @@ function Friends({ accessToken, onBack }: { accessToken: string; onBack: () => v
     setStatus("loading");
     try {
       const headers = { Authorization: `Bearer ${accessToken}` };
-      const [friendsResponse, requestsResponse] = await Promise.all([fetch(FRIENDS_API_URL, { headers }), fetch(`${FRIENDS_API_URL}/requests`, { headers })]);
-      if (!friendsResponse.ok || !requestsResponse.ok) throw new Error("Friends request failed");
+      const [friendsResponse, requestsResponse, profileResponse] = await Promise.all([fetch(FRIENDS_API_URL, { headers }), fetch(`${FRIENDS_API_URL}/requests`, { headers }), fetch(`${PROFILE_API_URL}/me`, { headers })]);
+      if (!friendsResponse.ok || !requestsResponse.ok || !profileResponse.ok) throw new Error("Friends request failed");
       setFriends(await friendsResponse.json() as FriendProfile[]);
       setIncoming(await requestsResponse.json() as IncomingFriendRequest[]);
+      const profile = await profileResponse.json() as { presenceStatus: PresenceStatus };
+      setPresenceStatus(profile.presenceStatus);
       setStatus("ready");
     } catch {
       setStatus("error");
@@ -426,12 +432,25 @@ function Friends({ accessToken, onBack }: { accessToken: string; onBack: () => v
       setMessage(`${friend.username} was removed from your friends.`);
     } catch { setMessage("Could not remove that friend. Try again."); }
   };
+  const updatePresence = async (nextStatus: PresenceStatus) => {
+    const previousStatus = presenceStatus;
+    setPresenceStatus(nextStatus);
+    setSavingPresence(true);
+    try {
+      const response = await fetch(`${PROFILE_API_URL}/me/presence`, { method: "PATCH", headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" }, body: JSON.stringify({ presenceStatus: nextStatus }) });
+      if (!response.ok) throw new Error();
+      setMessage(`Your status is ${nextStatus.toLocaleLowerCase()}.`);
+    } catch {
+      setPresenceStatus(previousStatus);
+      setMessage("Could not update your status. Try again.");
+    } finally { setSavingPresence(false); }
+  };
   return <main className="friends-page">
     <header className="friends-header"><div><p className="eyebrow">SOCIAL</p><h1>Friends</h1><p>Keep your Nordiee people in one place.</p></div><button className="text-button" type="button" onClick={onBack}>Back to Home</button></header>
     <section className="friends-grid">
-      <article className="panel add-friend-card"><p className="panel-label">ADD FRIEND</p><h2>Find a player</h2><form onSubmit={(event) => void sendRequest(event)}><label>Nordiee username<input value={username} onChange={(event) => setUsername(event.target.value)} placeholder="Username" minLength={3} maxLength={24} required autoComplete="off" /></label><button className="primary-button" type="submit" disabled={submitting}>{submitting ? "Sending" : "Send request"}</button></form>{message && <p className={message.endsWith("sent.") || message.endsWith("accepted.") || message.includes("was removed") ? "friends-message success" : "friends-message"} role="status">{message}</p>}</article>
+      <article className="panel add-friend-card"><p className="panel-label">YOUR STATUS</p><h2>How do you appear?</h2><label className="presence-picker">Presence<select value={presenceStatus} disabled={savingPresence} onChange={(event) => void updatePresence(event.target.value as PresenceStatus)}><option value="ONLINE">Online</option><option value="AWAY">Away</option><option value="BUSY">Busy</option><option value="INVISIBLE">Invisible</option><option value="OFFLINE">Offline</option></select></label><p className="presence-hint">Invisible appears offline to other players.</p><div className="add-friend-divider" /><p className="panel-label">ADD FRIEND</p><h2>Find a player</h2><form onSubmit={(event) => void sendRequest(event)}><label>Nordiee username<input value={username} onChange={(event) => setUsername(event.target.value)} placeholder="Username" minLength={3} maxLength={24} required autoComplete="off" /></label><button className="primary-button" type="submit" disabled={submitting}>{submitting ? "Sending" : "Send request"}</button></form>{message && <p className={message.endsWith("sent.") || message.endsWith("accepted.") || message.includes("was removed") || message.startsWith("Your status") ? "friends-message success" : "friends-message"} role="status">{message}</p>}</article>
       <article className="panel"><div className="panel-heading"><div><p className="panel-label">REQUESTS</p><h2>Incoming</h2></div><span className="count">{incoming.length}</span></div>{status === "loading" ? <p>Loading friend requests...</p> : incoming.length ? <ul className="friends-list">{incoming.map((request) => <li key={request.id}><span className="friend-avatar">{request.from.username[0]?.toUpperCase()}</span><strong>{request.from.username}</strong><small>{notificationTime(new Date(request.createdAt).getTime())}</small><div><button className="select-button" type="button" onClick={() => void accept(request.id)}>Accept</button><button className="text-button" type="button" onClick={() => void decline(request.id)}>Decline</button></div></li>)}</ul> : <p>No pending requests.</p>}</article>
-      <article className="panel friends-list-card"><div className="panel-heading"><div><p className="panel-label">YOUR FRIENDS</p><h2>{friends.length ? `${friends.length} connected` : "No friends yet"}</h2></div></div>{status === "error" ? <><p>We could not load Friends. Check your connection, then try again.</p><button className="text-button" type="button" onClick={() => void load()}>Try again</button></> : status === "loading" ? <p>Loading friends...</p> : friends.length ? <ul className="friends-list">{friends.map((friend) => <li key={friend.id}><span className="friend-avatar">{friend.username[0]?.toUpperCase()}</span><strong>{friend.username}</strong><small>Online status will appear here when presence is ready.</small><button className="text-button" type="button" onClick={() => void removeFriend(friend)}>Remove</button></li>)}</ul> : <p>Send a request by Nordiee username to start your list.</p>}</article>
+      <article className="panel friends-list-card"><div className="panel-heading"><div><p className="panel-label">YOUR FRIENDS</p><h2>{friends.length ? `${friends.length} connected` : "No friends yet"}</h2></div></div>{status === "error" ? <><p>We could not load Friends. Check your connection, then try again.</p><button className="text-button" type="button" onClick={() => void load()}>Try again</button></> : status === "loading" ? <p>Loading friends...</p> : friends.length ? <ul className="friends-list">{friends.map((friend) => <li key={friend.id}><span className={`friend-avatar presence-${friend.presenceStatus.toLocaleLowerCase()}`}>{friend.username[0]?.toUpperCase()}</span><strong>{friend.username}</strong><small>{friend.presenceStatus.toLocaleLowerCase()}</small><button className="text-button" type="button" onClick={() => void removeFriend(friend)}>Remove</button></li>)}</ul> : <p>Send a request by Nordiee username to start your list.</p>}</article>
     </section>
   </main>;
 }
