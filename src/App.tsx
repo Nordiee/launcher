@@ -22,6 +22,7 @@ type DiagnosticResult = "idle" | "checking" | "pass" | "fail";
 type NotificationKind = LauncherNotification["kind"];
 type ServiceStatus = "checking" | "operational" | "unavailable";
 type LibraryFilter = "all" | "installed" | "not-installed" | "favorites";
+type GameUpdateMode = "always" | "on-launch" | "never";
 const API_BASE_URL = "https://api.nordiee.com/api/v1/auth";
 const LIBRARY_API_URL = "https://api.nordiee.com/api/v1/library";
 const HEALTH_API_URL = "https://api.nordiee.com/health";
@@ -314,6 +315,10 @@ function Library({ accessToken, favoriteGameIds, onDownload, onNotify, onFavorit
     try { return JSON.parse(localStorage.getItem("nordiee.launchOptions") ?? "{}"); }
     catch { return {}; }
   });
+  const [gameUpdateModes, setGameUpdateModes] = useState<Record<string, GameUpdateMode>>(() => {
+    try { return JSON.parse(localStorage.getItem(`nordiee.gameUpdateModes.${email.toLocaleLowerCase()}`) ?? "{}"); }
+    catch { return {}; }
+  });
   const [editingLaunchOptions, setEditingLaunchOptions] = useState<string | null>(null);
   const [installError, setInstallError] = useState("");
   const [verification, setVerification] = useState<Record<string, VerificationState>>({});
@@ -359,7 +364,7 @@ function Library({ accessToken, favoriteGameIds, onDownload, onNotify, onFavorit
         if (active) setInstalledIds(installedGameIds);
         if (active) setInstalledSizes(Object.fromEntries(checks.flatMap((check) => check.size === null ? [] : [[check.id, check.size]])));
         if (localStorage.getItem("nordiee.autoUpdateGames") !== "false") {
-          for (const game of games.filter((game) => installedGameIds.includes(game.id))) {
+          for (const game of games.filter((game) => installedGameIds.includes(game.id) && (gameUpdateModes[game.id] ?? "always") === "always")) {
             try {
               const response = await fetch(`${LIBRARY_API_URL}/${game.id}/manifest`, { headers: { Authorization: `Bearer ${accessToken}` } });
               if (!response.ok) continue;
@@ -380,7 +385,7 @@ function Library({ accessToken, favoriteGameIds, onDownload, onNotify, onFavorit
     };
     if (games.length) void findInstalledGames();
     return () => { active = false; };
-  }, [accessToken, games]);
+  }, [accessToken, gameUpdateModes, games]);
   const runInstall = async (game: LibraryGame) => {
     setInstallError("");
     setInstallingId(game.id);
@@ -461,13 +466,18 @@ function Library({ accessToken, favoriteGameIds, onDownload, onNotify, onFavorit
     setLaunchOptions(next);
     localStorage.setItem("nordiee.launchOptions", JSON.stringify(next));
   };
+  const saveGameUpdateMode = (gameId: string, mode: GameUpdateMode) => {
+    const next = { ...gameUpdateModes, [gameId]: mode };
+    setGameUpdateModes(next);
+    localStorage.setItem(`nordiee.gameUpdateModes.${email.toLocaleLowerCase()}`, JSON.stringify(next));
+  };
   const play = async (game: LibraryGame) => {
     setInstallError("");
     setInstallingId(game.id);
     setDownloadProgress(null);
     startDownload(game, "Checking for updates");
     try {
-      try {
+      if ((gameUpdateModes[game.id] ?? "always") !== "never") try {
         const response = await fetch(`${LIBRARY_API_URL}/${game.id}/manifest`, { headers: { Authorization: `Bearer ${accessToken}` } });
         if (!response.ok) throw new Error("We could not check this game for updates.");
         const manifest = await response.json();
@@ -582,7 +592,7 @@ function Library({ accessToken, favoriteGameIds, onDownload, onNotify, onFavorit
     const primaryLabel = !isInstalled ? isQueued ? "Queued to install" : isInstalling ? percentage !== null ? `Downloading ${percentage}%` : "Preparing" : "Install" : checkState === "verifying" ? "Verifying" : checkState === "repair" ? isQueued ? "Queued to repair" : isInstalling ? percentage !== null ? `Repairing ${percentage}%` : "Preparing repair" : "Repair files" : "Verify files";
     const primaryAction = () => { if (!isInstalled) return void openInstallDialog(game); if (checkState === "repair") return enqueueTransfer(game, "repair"); return verify(game); };
     const isFavorite = favoriteGameIds.includes(game.id);
-    return <article className="library-card" key={game.id}><div className="library-cover" aria-hidden="true">N</div><div><p className="panel-label">{statusLabel}</p><h2>{game.title}</h2><p>{detail}</p><div className="library-actions"><button className={isFavorite ? "library-action favorite-action active" : "library-action favorite-action"} type="button" aria-pressed={isFavorite} onClick={() => onFavoriteToggle(game.id)}>{isFavorite ? "Favorited" : "Favorite"}</button>{isInstalled && <button className="library-action play-action" type="button" disabled={transferInProgress || isRunning || checkState === "repair"} onClick={() => void play(game)}>{isRunning ? "Running" : isInstalling ? percentage !== null ? `Updating ${percentage}%` : "Checking update" : "Play"}</button>}{isInstalled && <button className="library-action" type="button" disabled={isInstalling || isQueued || isRunning || checkState === "repair"} onClick={() => enqueueTransfer(game, "update")}>{isQueued ? "Queued" : "Check update"}</button>}<button className="library-action" type="button" disabled={isInstalling || isQueued || isRunning || checkState === "verifying"} onClick={primaryAction}>{primaryLabel}</button>{isInstalled && <button className="library-action" type="button" disabled={transferInProgress} onClick={() => void openFolder(game)}>Open folder</button>}{isInstalled && <button className="library-action" type="button" disabled={transferInProgress || isRunning} onClick={() => setEditingLaunchOptions(editingLaunchOptions === game.id ? null : game.id)}>Launch options</button>}{isInstalled && <button className="library-action uninstall-action" type="button" disabled={transferInProgress || isRunning} onClick={() => void uninstall(game)}>Uninstall</button>}</div>{editingLaunchOptions === game.id && <label className="launch-options"><span>Launch options</span><input value={launchOptions[game.id] ?? ""} onChange={(event) => saveLaunchOptions(game.id, event.target.value)} placeholder='Example: -windowed -log' spellCheck="false" /><small>Options are passed directly to this game only.</small></label>}</div></article>;
+    return <article className="library-card" key={game.id}><div className="library-cover" aria-hidden="true">N</div><div><p className="panel-label">{statusLabel}</p><h2>{game.title}</h2><p>{detail}</p><div className="library-actions"><button className={isFavorite ? "library-action favorite-action active" : "library-action favorite-action"} type="button" aria-pressed={isFavorite} onClick={() => onFavoriteToggle(game.id)}>{isFavorite ? "Favorited" : "Favorite"}</button>{isInstalled && <button className="library-action play-action" type="button" disabled={transferInProgress || isRunning || checkState === "repair"} onClick={() => void play(game)}>{isRunning ? "Running" : isInstalling ? percentage !== null ? `Updating ${percentage}%` : "Checking update" : "Play"}</button>}{isInstalled && <button className="library-action" type="button" disabled={isInstalling || isQueued || isRunning || checkState === "repair"} onClick={() => enqueueTransfer(game, "update")}>{isQueued ? "Queued" : "Check update"}</button>}<button className="library-action" type="button" disabled={isInstalling || isQueued || isRunning || checkState === "verifying"} onClick={primaryAction}>{primaryLabel}</button>{isInstalled && <button className="library-action" type="button" disabled={transferInProgress} onClick={() => void openFolder(game)}>Open folder</button>}{isInstalled && <button className="library-action" type="button" disabled={transferInProgress || isRunning} onClick={() => setEditingLaunchOptions(editingLaunchOptions === game.id ? null : game.id)}>Launch options</button>}{isInstalled && <button className="library-action uninstall-action" type="button" disabled={transferInProgress || isRunning} onClick={() => void uninstall(game)}>Uninstall</button>}</div>{isInstalled && <label className="launch-options update-mode"><span>Updates</span><select value={gameUpdateModes[game.id] ?? "always"} onChange={(event) => saveGameUpdateMode(game.id, event.target.value as GameUpdateMode)}><option value="always">Always update</option><option value="on-launch">Update when launched</option><option value="never">Never auto update</option></select></label>}{editingLaunchOptions === game.id && <label className="launch-options"><span>Launch options</span><input value={launchOptions[game.id] ?? ""} onChange={(event) => saveLaunchOptions(game.id, event.target.value)} placeholder='Example: -windowed -log' spellCheck="false" /><small>Options are passed directly to this game only.</small></label>}</div></article>;
   })}</section> : <section className="library-no-results"><div className="empty-mark" aria-hidden="true">N</div><h2>No games found</h2><p>Try a different title or library filter.</p></section>}{installDialog && <InstallDialog game={installDialog.game} root={installDialog.root} freeBytes={installDialog.freeBytes} onCancel={() => setInstallDialog(null)} onConfirm={() => { enqueueTransfer(installDialog.game, "install"); setInstallDialog(null); }} />}</>;
 }
 
