@@ -43,6 +43,10 @@ function parseLaunchOptions(value: string): string[] {
   return (value.match(/(?:[^\s"]+|"[^"]*")+/g) ?? []).map((part) => part.startsWith('"') && part.endsWith('"') ? part.slice(1, -1) : part);
 }
 
+function updateSummary(version: string, changedFiles: number) {
+  return `${changedFiles} ${changedFiles === 1 ? "file" : "files"} updated to ${version}.`;
+}
+
 const navigation: { label: View; icon: ReactNode }[] = [
   { label: "Home", icon: <HomeIcon /> },
   { label: "Library", icon: <LibraryIcon /> },
@@ -412,8 +416,8 @@ function Library({ accessToken, favoriteGameIds, playtimeByGame, onDownload, onN
               const manifest = await response.json();
               const result = await invoke<{ version: string; changedFiles: number }>("update_game", { manifestJson: JSON.stringify(manifest), installRoot: root, downloadLimitMbps: configuredDownloadLimitMbps() });
               if (active && result.changedFiles) {
-                setUpdateStatus((current) => ({ ...current, [game.id]: `Updated to ${result.version}` }));
-                onNotify("Game updated", `${game.title} updated to version ${result.version}.`, "success");
+                setUpdateStatus((current) => ({ ...current, [game.id]: updateSummary(result.version, result.changedFiles) }));
+                onNotify("Game updated", `${game.title}: ${updateSummary(result.version, result.changedFiles)}`, "success");
               }
             } catch {
               continue;
@@ -524,8 +528,8 @@ function Library({ accessToken, favoriteGameIds, playtimeByGame, onDownload, onN
         const manifest = await response.json();
         const updateResult = await invoke<{ version: string; changedFiles: number }>("update_game", { manifestJson: JSON.stringify(manifest), installRoot: await installRoot(), downloadLimitMbps: configuredDownloadLimitMbps() });
         if (updateResult.changedFiles) {
-          setUpdateStatus((current) => ({ ...current, [game.id]: `Updated to ${updateResult.version}` }));
-          onNotify("Game updated", `${game.title} updated to version ${updateResult.version}.`, "success");
+          setUpdateStatus((current) => ({ ...current, [game.id]: updateSummary(updateResult.version, updateResult.changedFiles) }));
+          onNotify("Game updated", `${game.title}: ${updateSummary(updateResult.version, updateResult.changedFiles)}`, "success");
         }
       } catch (error) {
         if (!(error instanceof TypeError)) throw error;
@@ -553,9 +557,9 @@ function Library({ accessToken, favoriteGameIds, playtimeByGame, onDownload, onN
       if (!response.ok) throw new Error("We could not check this game for updates.");
       const manifest = await response.json();
       const result = await invoke<{ version: string; changedFiles: number }>("update_game", { manifestJson: JSON.stringify(manifest), installRoot: await installRoot(), downloadLimitMbps: configuredDownloadLimitMbps() });
-      setUpdateStatus((current) => ({ ...current, [game.id]: result.changedFiles ? `Updated to ${result.version}` : "Already up to date." }));
+      setUpdateStatus((current) => ({ ...current, [game.id]: result.changedFiles ? updateSummary(result.version, result.changedFiles) : "Already up to date." }));
       setVerification((current) => ({ ...current, [game.id]: "verified" }));
-      onNotify(result.changedFiles ? "Game updated" : "Game is up to date", result.changedFiles ? `${game.title} updated to version ${result.version}.` : `${game.title} already has the latest files.`, "success");
+      onNotify(result.changedFiles ? "Game updated" : "Game is up to date", result.changedFiles ? `${game.title}: ${updateSummary(result.version, result.changedFiles)}` : `${game.title} already has the latest files.`, "success");
     } catch (error) {
       const message = error instanceof Error ? error.message : "We could not update this game.";
       setInstallError(message);
