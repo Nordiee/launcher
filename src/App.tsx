@@ -24,6 +24,11 @@ async function installRoot() {
   return saved?.trim() || invoke<string>("default_install_root");
 }
 
+function configuredDownloadLimitMbps(): number | null {
+  const value = Number(localStorage.getItem("nordiee.downloadLimitMbps"));
+  return [10, 25, 50, 100].includes(value) ? value : null;
+}
+
 const navigation: { label: View; icon: ReactNode }[] = [
   { label: "Home", icon: <HomeIcon /> },
   { label: "Library", icon: <LibraryIcon /> },
@@ -219,7 +224,7 @@ function Library({ accessToken, onDownload, runningGameIds }: { accessToken: str
               const response = await fetch(`${LIBRARY_API_URL}/${game.id}/manifest`, { headers: { Authorization: `Bearer ${accessToken}` } });
               if (!response.ok) continue;
               const manifest = await response.json();
-              const result = await invoke<{ version: string; changedFiles: number }>("update_game", { manifestJson: JSON.stringify(manifest), installRoot: root });
+              const result = await invoke<{ version: string; changedFiles: number }>("update_game", { manifestJson: JSON.stringify(manifest), installRoot: root, downloadLimitMbps: configuredDownloadLimitMbps() });
               if (active && result.changedFiles) setUpdateStatus((current) => ({ ...current, [game.id]: `Updated to ${result.version}` }));
             } catch {
               continue;
@@ -242,7 +247,7 @@ function Library({ accessToken, onDownload, runningGameIds }: { accessToken: str
       const response = await fetch(`${LIBRARY_API_URL}/${game.id}/manifest`, { headers: { Authorization: `Bearer ${accessToken}` } });
       if (!response.ok) throw new Error("This game does not have an active install build yet.");
       const manifest = await response.json();
-      await invoke("install_game", { manifestJson: JSON.stringify(manifest), installRoot: await installRoot() });
+      await invoke("install_game", { manifestJson: JSON.stringify(manifest), installRoot: await installRoot(), downloadLimitMbps: configuredDownloadLimitMbps() });
       setInstalledIds((current) => [...new Set([...current, game.id])]);
     } catch (error) {
       setInstallError(error instanceof Error ? error.message : "We could not install this game.");
@@ -268,7 +273,7 @@ function Library({ accessToken, onDownload, runningGameIds }: { accessToken: str
     setDownloadProgress(null);
     startDownload(game, "Repairing");
     try {
-      await invoke("repair_game", { gameId: game.id, installRoot: await installRoot() });
+      await invoke("repair_game", { gameId: game.id, installRoot: await installRoot(), downloadLimitMbps: configuredDownloadLimitMbps() });
       setVerification((current) => ({ ...current, [game.id]: "verified" }));
     } catch (error) {
       setInstallError(error instanceof Error ? error.message : "We could not repair this game.");
@@ -300,7 +305,7 @@ function Library({ accessToken, onDownload, runningGameIds }: { accessToken: str
       const response = await fetch(`${LIBRARY_API_URL}/${game.id}/manifest`, { headers: { Authorization: `Bearer ${accessToken}` } });
       if (!response.ok) throw new Error("We could not check this game for updates.");
       const manifest = await response.json();
-      const updateResult = await invoke<{ version: string; changedFiles: number }>("update_game", { manifestJson: JSON.stringify(manifest), installRoot: await installRoot() });
+      const updateResult = await invoke<{ version: string; changedFiles: number }>("update_game", { manifestJson: JSON.stringify(manifest), installRoot: await installRoot(), downloadLimitMbps: configuredDownloadLimitMbps() });
       if (updateResult.changedFiles) setUpdateStatus((current) => ({ ...current, [game.id]: `Updated to ${updateResult.version}` }));
       await invoke("launch_game", { gameId: game.id, installRoot: await installRoot() });
     } catch (error) {
@@ -319,7 +324,7 @@ function Library({ accessToken, onDownload, runningGameIds }: { accessToken: str
       const response = await fetch(`${LIBRARY_API_URL}/${game.id}/manifest`, { headers: { Authorization: `Bearer ${accessToken}` } });
       if (!response.ok) throw new Error("We could not check this game for updates.");
       const manifest = await response.json();
-      const result = await invoke<{ version: string; changedFiles: number }>("update_game", { manifestJson: JSON.stringify(manifest), installRoot: await installRoot() });
+      const result = await invoke<{ version: string; changedFiles: number }>("update_game", { manifestJson: JSON.stringify(manifest), installRoot: await installRoot(), downloadLimitMbps: configuredDownloadLimitMbps() });
       setUpdateStatus((current) => ({ ...current, [game.id]: result.changedFiles ? `Updated to ${result.version}` : "Already up to date." }));
       setVerification((current) => ({ ...current, [game.id]: "verified" }));
     } catch (error) {
@@ -357,10 +362,12 @@ function EmptyState({ title, text, action }: { title: string; text: string; acti
 function Settings() {
   const [installRootValue, setInstallRootValue] = useState(() => localStorage.getItem("nordiee.installRoot") ?? "");
   const [autoUpdateGames, setAutoUpdateGames] = useState(() => localStorage.getItem("nordiee.autoUpdateGames") !== "false");
+  const [downloadLimitMbps, setDownloadLimitMbps] = useState<number | null>(configuredDownloadLimitMbps);
   const [diagnostics, setDiagnostics] = useState<Record<string, DiagnosticResult>>({ api: "idle", downloads: "idle", storage: "idle" });
   useEffect(() => { if (!installRootValue) void installRoot().then(setInstallRootValue); }, [installRootValue]);
   const saveInstallRoot = (value: string) => { setInstallRootValue(value); if (value.trim()) localStorage.setItem("nordiee.installRoot", value.trim()); else localStorage.removeItem("nordiee.installRoot"); };
   const setAutoUpdate = (enabled: boolean) => { setAutoUpdateGames(enabled); localStorage.setItem("nordiee.autoUpdateGames", String(enabled)); };
+  const saveDownloadLimit = (value: string) => { const next = value === "unlimited" ? null : Number(value); setDownloadLimitMbps(next); if (next) localStorage.setItem("nordiee.downloadLimitMbps", String(next)); else localStorage.removeItem("nordiee.downloadLimitMbps"); };
   const runDiagnostics = async () => {
     setDiagnostics({ api: "checking", downloads: "checking", storage: "checking" });
     const root = await installRoot();
@@ -372,5 +379,5 @@ function Settings() {
     setDiagnostics({ api: api ? "pass" : "fail", downloads: downloads ? "pass" : "fail", storage: storage ? "pass" : "fail" });
   };
   const diagnosticLabel = (result: DiagnosticResult) => result === "checking" ? "Checking" : result === "pass" ? "Available" : result === "fail" ? "Unavailable" : "Not checked";
-  return <section className="settings"><article className="panel"><p className="panel-label">LAUNCHER</p><h3>Application settings</h3><div className="setting-row"><div><strong>Launch at startup</strong><small>Start Nordiee when you sign in to Windows.</small></div><button className="toggle" type="button" aria-label="Launch at startup, disabled" /></div><div className="setting-row"><div><strong>Game install location</strong><small>Games install beside Nordiee in the NordieeApps folder by default.</small></div><label className="path-field"><span className="sr-only">Game install location</span><input value={installRootValue} onChange={(event) => saveInstallRoot(event.target.value)} spellCheck="false" /></label></div><div className="setting-row"><div><strong>Automatically update games</strong><small>Check installed games when Nordiee opens and download changed files.</small></div><button className={autoUpdateGames ? "toggle enabled" : "toggle"} type="button" aria-pressed={autoUpdateGames} aria-label="Automatically update games" onClick={() => setAutoUpdate(!autoUpdateGames)} /></div><div className="setting-row"><div><strong>Download limit</strong><small>No limit configured.</small></div><button className="select-button" type="button">Unlimited</button></div></article><article className="panel diagnostics"><div className="panel-heading"><div><p className="panel-label">DIAGNOSTICS</p><h3>System checks</h3></div><button className="select-button" type="button" onClick={() => void runDiagnostics()}>Run checks</button></div><p>Test Nordiee API, downloads and write permission before troubleshooting a game.</p><div className="diagnostic-list">{(["api", "downloads", "storage"] as const).map((key) => <div className="diagnostic-row" key={key}><span>{key === "api" ? "Nordiee API" : key === "downloads" ? "Download service" : "NordieeApps write access"}</span><strong className={`diagnostic-${diagnostics[key]}`}>{diagnosticLabel(diagnostics[key])}</strong></div>)}</div></article></section>;
+  return <section className="settings"><article className="panel"><p className="panel-label">LAUNCHER</p><h3>Application settings</h3><div className="setting-row"><div><strong>Launch at startup</strong><small>Start Nordiee when you sign in to Windows.</small></div><button className="toggle" type="button" aria-label="Launch at startup, disabled" /></div><div className="setting-row"><div><strong>Game install location</strong><small>Games install beside Nordiee in the NordieeApps folder by default.</small></div><label className="path-field"><span className="sr-only">Game install location</span><input value={installRootValue} onChange={(event) => saveInstallRoot(event.target.value)} spellCheck="false" /></label></div><div className="setting-row"><div><strong>Automatically update games</strong><small>Check installed games when Nordiee opens and download changed files.</small></div><button className={autoUpdateGames ? "toggle enabled" : "toggle"} type="button" aria-pressed={autoUpdateGames} aria-label="Automatically update games" onClick={() => setAutoUpdate(!autoUpdateGames)} /></div><div className="setting-row"><div><strong>Download limit</strong><small>{downloadLimitMbps ? `Cap game downloads at ${downloadLimitMbps} MB/s.` : "Use all available bandwidth."}</small></div><label><span className="sr-only">Download limit</span><select className="select-button" value={downloadLimitMbps ?? "unlimited"} onChange={(event) => saveDownloadLimit(event.target.value)}><option value="unlimited">Unlimited</option><option value="10">10 MB/s</option><option value="25">25 MB/s</option><option value="50">50 MB/s</option><option value="100">100 MB/s</option></select></label></div></article><article className="panel diagnostics"><div className="panel-heading"><div><p className="panel-label">DIAGNOSTICS</p><h3>System checks</h3></div><button className="select-button" type="button" onClick={() => void runDiagnostics()}>Run checks</button></div><p>Test Nordiee API, downloads and write permission before troubleshooting a game.</p><div className="diagnostic-list">{(["api", "downloads", "storage"] as const).map((key) => <div className="diagnostic-row" key={key}><span>{key === "api" ? "Nordiee API" : key === "downloads" ? "Download service" : "NordieeApps write access"}</span><strong className={`diagnostic-${diagnostics[key]}`}>{diagnosticLabel(diagnostics[key])}</strong></div>)}</div></article></section>;
 }

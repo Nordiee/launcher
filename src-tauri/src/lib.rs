@@ -4,6 +4,7 @@ use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, State};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -49,15 +50,15 @@ fn remove_account_secret(email: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn install_game(app: AppHandle, manifest_json: String, install_root: String) -> Result<serde_json::Value, String> {
+async fn install_game(app: AppHandle, manifest_json: String, install_root: String, download_limit_mbps: Option<u64>) -> Result<serde_json::Value, String> {
     let manifest: nordiee_core::GameManifest = serde_json::from_str(&manifest_json)
         .map_err(|_| "The game build manifest is invalid.".to_string())?;
     manifest.validate().map_err(|error| error.to_string())?;
-    download_manifest(&app, &manifest, &install_root, None).await
+    download_manifest(&app, &manifest, &install_root, None, download_limit_mbps).await
 }
 
 #[tauri::command]
-async fn repair_game(app: AppHandle, game_id: String, install_root: String) -> Result<serde_json::Value, String> {
+async fn repair_game(app: AppHandle, game_id: String, install_root: String, download_limit_mbps: Option<u64>) -> Result<serde_json::Value, String> {
     if !safe_game_id(&game_id) {
         return Err("The game identifier is invalid.".to_string());
     }
@@ -79,12 +80,12 @@ async fn repair_game(app: AppHandle, game_id: String, install_root: String) -> R
         return Ok(serde_json::json!({ "gameId": game_id, "repairedFiles": 0 }));
     }
     let repaired_files = damaged_files.len();
-    download_manifest(&app, &manifest, &install_root, Some(&damaged_files)).await?;
+    download_manifest(&app, &manifest, &install_root, Some(&damaged_files), download_limit_mbps).await?;
     Ok(serde_json::json!({ "gameId": game_id, "repairedFiles": repaired_files }))
 }
 
 #[tauri::command]
-async fn update_game(app: AppHandle, manifest_json: String, install_root: String) -> Result<serde_json::Value, String> {
+async fn update_game(app: AppHandle, manifest_json: String, install_root: String, download_limit_mbps: Option<u64>) -> Result<serde_json::Value, String> {
     let manifest: nordiee_core::GameManifest = serde_json::from_str(&manifest_json)
         .map_err(|_| "The game build manifest is invalid.".to_string())?;
     manifest.validate().map_err(|error| error.to_string())?;
@@ -100,16 +101,17 @@ async fn update_game(app: AppHandle, manifest_json: String, install_root: String
         }
     }
     let changed_file_count = changed_files.len();
-    download_manifest(&app, &manifest, &install_root, Some(&changed_files)).await?;
+    download_manifest(&app, &manifest, &install_root, Some(&changed_files), download_limit_mbps).await?;
     Ok(serde_json::json!({ "gameId": manifest.game_id, "version": manifest.version, "changedFiles": changed_file_count }))
 }
 
-async fn download_manifest(app: &AppHandle, manifest: &nordiee_core::GameManifest, install_root: &str, selected_files: Option<&HashSet<String>>) -> Result<serde_json::Value, String> {
+async fn download_manifest(app: &AppHandle, manifest: &nordiee_core::GameManifest, install_root: &str, selected_files: Option<&HashSet<String>>, download_limit_mbps: Option<u64>) -> Result<serde_json::Value, String> {
     let game_directory = PathBuf::from(install_root).join(&manifest.game_id);
     tokio::fs::create_dir_all(&game_directory).await.map_err(|error| error.to_string())?;
     let total_bytes = manifest.files.iter().filter(|file| selected_files.map_or(true, |selected| selected.contains(&file.path))).map(|file| file.size).sum::<u64>();
     let mut completed_bytes = 0_u64;
     let client = reqwest::Client::new();
+    let mut rate_limiter = DownloadRateLimiter::new(download_limit_mbps);
 
     for file in manifest.files.iter().filter(|file| selected_files.map_or(true, |selected| selected.contains(&file.path))) {
         let final_path = safe_install_path(&game_directory, &file.path)?;
@@ -147,6 +149,7 @@ async fn download_manifest(app: &AppHandle, manifest: &nordiee_core::GameManifes
             output.write_all(&chunk).await.map_err(|error| error.to_string())?;
             checksum.update(&chunk);
             received_for_file += chunk.len() as u64;
+            rate_limiter.after_chunk(chunk.len() as u64).await;
             let _ = app.emit("game-download-progress", serde_json::json!({
                 "gameId": manifest.game_id,
                 "filePath": file.path,
@@ -170,6 +173,27 @@ async fn download_manifest(app: &AppHandle, manifest: &nordiee_core::GameManifes
         .map_err(|error| error.to_string())?;
     let _ = app.emit("game-download-complete", serde_json::json!({ "gameId": manifest.game_id, "path": game_directory }));
     Ok(serde_json::json!({ "gameId": manifest.game_id, "path": game_directory, "version": manifest.version }))
+}
+
+struct DownloadRateLimiter {
+    bytes_per_second: Option<u64>,
+    started_at: Instant,
+    transferred_bytes: u64,
+}
+
+impl DownloadRateLimiter {
+    fn new(limit_mbps: Option<u64>) -> Self {
+        Self { bytes_per_second: limit_mbps.filter(|limit| *limit > 0).map(|limit| limit * 1_000_000), started_at: Instant::now(), transferred_bytes: 0 }
+    }
+
+    async fn after_chunk(&mut self, bytes: u64) {
+        let Some(bytes_per_second) = self.bytes_per_second else { return; };
+        self.transferred_bytes += bytes;
+        let expected = Duration::from_secs_f64(self.transferred_bytes as f64 / bytes_per_second as f64);
+        if let Some(wait) = expected.checked_sub(self.started_at.elapsed()) {
+            tokio::time::sleep(wait).await;
+        }
+    }
 }
 
 #[tauri::command]
