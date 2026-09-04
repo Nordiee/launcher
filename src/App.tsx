@@ -630,6 +630,7 @@ function Library({ accessToken, favoriteGameIds, recentGames, searchRequest, pla
   const queueNotice = queuedTransfers.length ? <div className="queue-notice" role="status"><span>{queuedTransfers.length} {queuedTransfers.length === 1 ? "game is" : "games are"} waiting in the transfer queue.</span><button className="text-button" type="button" onClick={clearTransferQueue}>Clear queue</button></div> : null;
   const normalizedQuery = libraryQuery.trim().toLocaleLowerCase();
   const recentOrder = new Map(recentGames.map((game, index) => [game.id, index]));
+  const recentById = new Map(recentGames.map((game) => [game.id, game]));
   const visibleGames = games.filter((game) => {
     const isInstalled = installedIds.includes(game.id) || game.installState === "INSTALLED";
     if (libraryFilter === "installed" && !isInstalled) return false;
@@ -668,7 +669,9 @@ function Library({ accessToken, favoriteGameIds, recentGames, searchRequest, pla
     const installedSize = installedSizes[game.id];
     const displaySize = installedSize ?? game.installSizeBytes;
     const playtimeSeconds = playtimeByGame[game.id] ?? 0;
-    const playtimeLabel = playtimeSeconds >= 3600 ? `${Math.floor(playtimeSeconds / 3600)}h ${Math.floor((playtimeSeconds % 3600) / 60)}m played` : `${Math.floor(playtimeSeconds / 60)}m played`;
+    const lastPlayedAt = recentById.get(game.id)?.lastPlayedAt;
+    const lastPlayedLabel = lastPlayedAt ? `Last played ${new Intl.RelativeTimeFormat(undefined, { numeric: "auto" }).format(Math.round((lastPlayedAt - Date.now()) / 86_400_000), "day")}` : "";
+    const playtimeLabel = [lastPlayedLabel, playtimeSeconds >= 3600 ? `${Math.floor(playtimeSeconds / 3600)}h ${Math.floor((playtimeSeconds % 3600) / 60)}m played` : `${Math.floor(playtimeSeconds / 60)}m played`].filter(Boolean).join(" • ");
     const detail = isInstalling && percentage !== null ? `${percentage}% downloaded` : updateStatus[game.id] ?? (checkState === "verified" ? "All installed files verified." : checkState === "repair" ? "One or more files need repair." : displaySize ? `${isInstalled ? "Installed" : "Download"} · ${(displaySize / 1_000_000_000).toFixed(1)} GB` : "Size will be available soon");
     const primaryLabel = !isInstalled ? isQueued ? "Queued to install" : isInstalling ? percentage !== null ? `Downloading ${percentage}%` : "Preparing" : "Install" : checkState === "verifying" ? "Verifying" : checkState === "repair" ? isQueued ? "Queued to repair" : isInstalling ? percentage !== null ? `Repairing ${percentage}%` : "Preparing repair" : "Repair files" : "Verify files";
     const primaryAction = () => { if (!isInstalled) return void openInstallDialog(game); if (checkState === "repair") return enqueueTransfer(game, "repair"); return verify(game); };
