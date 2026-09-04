@@ -4,7 +4,7 @@ use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Emitter};
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 #[tauri::command]
 fn launcher_version() -> &'static str {
@@ -114,12 +114,30 @@ async fn download_manifest(app: &AppHandle, manifest: &nordiee_core::GameManifes
         let parent = final_path.parent().ok_or("The game file path is invalid.")?;
         tokio::fs::create_dir_all(parent).await.map_err(|error| error.to_string())?;
 
-        let response = client.get(&file.source_url).send().await.map_err(|error| error.to_string())?
-            .error_for_status().map_err(|error| error.to_string())?;
+        let (mut checksum, mut received_for_file) = checksum_partial_file(&partial_path).await?;
+        if received_for_file >= file.size {
+            let _ = tokio::fs::remove_file(&partial_path).await;
+            checksum = Sha256::new();
+            received_for_file = 0;
+        }
+        let request = if received_for_file > 0 {
+            client.get(&file.source_url).header(reqwest::header::RANGE, format!("bytes={received_for_file}-"))
+        } else {
+            client.get(&file.source_url)
+        };
+        let mut response = request.send().await.map_err(|error| error.to_string())?.error_for_status().map_err(|error| error.to_string())?;
+        if received_for_file > 0 && response.status() != reqwest::StatusCode::PARTIAL_CONTENT {
+            let _ = tokio::fs::remove_file(&partial_path).await;
+            checksum = Sha256::new();
+            received_for_file = 0;
+            response = client.get(&file.source_url).send().await.map_err(|error| error.to_string())?.error_for_status().map_err(|error| error.to_string())?;
+        }
         let mut stream = response.bytes_stream();
-        let mut output = tokio::fs::File::create(&partial_path).await.map_err(|error| error.to_string())?;
-        let mut checksum = Sha256::new();
-        let mut received_for_file = 0_u64;
+        let mut output = if received_for_file > 0 {
+            tokio::fs::OpenOptions::new().append(true).open(&partial_path).await.map_err(|error| error.to_string())?
+        } else {
+            tokio::fs::File::create(&partial_path).await.map_err(|error| error.to_string())?
+        };
 
         while let Some(chunk) = stream.next().await {
             let chunk = chunk.map_err(|error| error.to_string())?;
@@ -239,13 +257,33 @@ async fn hash_file(path: &Path) -> Result<String, String> {
     let mut checksum = Sha256::new();
     let mut buffer = vec![0_u8; 1024 * 1024];
     loop {
-        let bytes_read = tokio::io::AsyncReadExt::read(&mut file, &mut buffer).await.map_err(|error| error.to_string())?;
+        let bytes_read = file.read(&mut buffer).await.map_err(|error| error.to_string())?;
         if bytes_read == 0 {
             break;
         }
         checksum.update(&buffer[..bytes_read]);
     }
     Ok(format!("{:x}", checksum.finalize()))
+}
+
+async fn checksum_partial_file(path: &Path) -> Result<(Sha256, u64), String> {
+    let mut file = match tokio::fs::File::open(path).await {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok((Sha256::new(), 0)),
+        Err(error) => return Err(error.to_string()),
+    };
+    let mut checksum = Sha256::new();
+    let mut received_bytes = 0_u64;
+    let mut buffer = vec![0_u8; 1024 * 1024];
+    loop {
+        let bytes_read = file.read(&mut buffer).await.map_err(|error| error.to_string())?;
+        if bytes_read == 0 {
+            break;
+        }
+        checksum.update(&buffer[..bytes_read]);
+        received_bytes += bytes_read as u64;
+    }
+    Ok((checksum, received_bytes))
 }
 
 fn safe_install_path(game_directory: &Path, relative_path: &str) -> Result<PathBuf, String> {
