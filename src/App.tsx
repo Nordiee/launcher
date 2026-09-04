@@ -7,7 +7,7 @@ import { activeAccountEmail, clearActiveAccount, getAccountSession, listSavedAcc
 import { readLibraryCache, saveLibraryCache, type LibraryGame } from "./libraryCache";
 import { applyAvailableUpdate, type UpdateState } from "./updates";
 import { readNotifications, saveNotifications, type LauncherNotification } from "./notificationStore";
-import { listenForTransferQueue, publishTransferQueue, readTransferQueue, type QueuedTransfer, type TransferKind } from "./transferQueue";
+import { clearTransferQueue as clearQueuedTransfers, enqueueTransfer as enqueueQueuedTransfer, listenForTransferQueue, moveTransferInQueue, readTransferQueue, removeTransferFromQueue, takeNextTransfer, type QueuedTransfer, type TransferKind } from "./transferQueue";
 
 type View = "Home" | "Library" | "Downloads" | "Settings";
 type AuthMode = "sign-in" | "sign-up";
@@ -272,8 +272,7 @@ function Library({ accessToken, onDownload, onNotify, runningGameIds }: { access
   const [verification, setVerification] = useState<Record<string, VerificationState>>({});
   const [updateStatus, setUpdateStatus] = useState<Record<string, string>>({});
   const [downloadProgress, setDownloadProgress] = useState<{ gameId: string; downloadedBytes: number; totalBytes: number } | null>(null);
-  const [queuedTransfers, setQueuedTransfers] = useState<QueuedTransfer[]>([]);
-  const queuedTransfersRef = useRef<QueuedTransfer[]>([]);
+  const [queuedTransfers, setQueuedTransfers] = useState<QueuedTransfer[]>(readTransferQueue);
   const processingTransferRef = useRef(false);
   const [installDialog, setInstallDialog] = useState<{ game: LibraryGame; root: string; freeBytes: number } | null>(null);
   const loadLibrary = async () => {
@@ -297,6 +296,7 @@ function Library({ accessToken, onDownload, onNotify, runningGameIds }: { access
     const unlisten = listen<{ gameId: string; downloadedBytes: number; totalBytes: number }>("game-download-progress", (event) => setDownloadProgress(event.payload));
     return () => { void unlisten.then((cleanup) => cleanup()); };
   }, []);
+  useEffect(() => listenForTransferQueue(setQueuedTransfers), []);
   const startDownload = (game: LibraryGame, phase: string) => onDownload({ gameId: game.id, title: game.title, phase });
   useEffect(() => {
     let active = true;
@@ -470,9 +470,7 @@ function Library({ accessToken, onDownload, onNotify, runningGameIds }: { access
   const processTransferQueue = async () => {
     if (processingTransferRef.current) return;
     processingTransferRef.current = true;
-    const next = queuedTransfersRef.current.shift();
-    setQueuedTransfers([...queuedTransfersRef.current]);
-    publishTransferQueue([...queuedTransfersRef.current]);
+    const next = takeNextTransfer();
     if (!next) { processingTransferRef.current = false; return; }
     try {
       if (next.kind === "install") await runInstall(next.game);
@@ -484,19 +482,15 @@ function Library({ accessToken, onDownload, onNotify, runningGameIds }: { access
     }
   };
   const enqueueTransfer = (game: LibraryGame, kind: TransferKind) => {
-    const alreadyQueued = queuedTransfersRef.current.some((transfer) => transfer.game.id === game.id);
+    const alreadyQueued = readTransferQueue().some((transfer) => transfer.game.id === game.id);
     if (installingId === game.id || alreadyQueued) return;
-    queuedTransfersRef.current = [...queuedTransfersRef.current, { id: crypto.randomUUID(), game, kind }];
-    setQueuedTransfers([...queuedTransfersRef.current]);
-    publishTransferQueue([...queuedTransfersRef.current]);
+    enqueueQueuedTransfer({ id: crypto.randomUUID(), game, kind });
     if (processingTransferRef.current) onNotify("Added to queue", `${game.title} will ${kind === "install" ? "install" : kind === "repair" ? "repair" : "update"} after the active transfer.`, "info");
     void processTransferQueue();
   };
   const clearTransferQueue = () => {
-    if (!queuedTransfersRef.current.length) return;
-    queuedTransfersRef.current = [];
-    setQueuedTransfers([]);
-    publishTransferQueue([]);
+    if (!readTransferQueue().length) return;
+    clearQueuedTransfers();
     onNotify("Transfer queue cleared", "The active transfer continues and partial files stay safe.", "info");
   };
   const openInstallDialog = async (game: LibraryGame) => {
@@ -554,7 +548,7 @@ function Downloads({ download, queuedTransfers, paused, onTogglePaused }: { down
 }
 function QueuedTransfers({ transfers }: { transfers: QueuedTransfer[] }) {
   const actionLabel = (kind: TransferKind) => kind === "install" ? "Install" : kind === "repair" ? "Repair" : "Update";
-  return <section className="queued-transfers" aria-label="Transfers waiting in queue"><div className="queued-transfers-heading"><p className="panel-label">UP NEXT</p><span>{transfers.length} waiting</span></div><ol>{transfers.map((transfer, index) => <li key={transfer.id}><span className="queue-position">{index + 1}</span><span><strong>{transfer.game.title}</strong><small>{actionLabel(transfer.kind)}</small></span></li>)}</ol></section>;
+  return <section className="queued-transfers" aria-label="Transfers waiting in queue"><div className="queued-transfers-heading"><p className="panel-label">UP NEXT</p><span>{transfers.length} waiting</span></div><ol>{transfers.map((transfer, index) => <li key={transfer.id}><span className="queue-position">{index + 1}</span><span className="queue-game"><strong>{transfer.game.title}</strong><small>{actionLabel(transfer.kind)}</small></span><span className="queue-actions"><button type="button" aria-label={`Move ${transfer.game.title} up`} disabled={index === 0} onClick={() => moveTransferInQueue(transfer.id, -1)}>Up</button><button type="button" aria-label={`Move ${transfer.game.title} down`} disabled={index === transfers.length - 1} onClick={() => moveTransferInQueue(transfer.id, 1)}>Down</button><button className="queue-remove" type="button" aria-label={`Remove ${transfer.game.title} from queue`} onClick={() => removeTransferFromQueue(transfer.id)}>Remove</button></span></li>)}</ol></section>;
 }
 function EmptyState({ title, text, action }: { title: string; text: string; action: string }) { return <section className="empty-state"><div className="empty-mark" aria-hidden="true">N</div><h2>{title}</h2><p>{text}</p><button className="primary-button" type="button">{action}</button></section>; }
 function Settings() {
