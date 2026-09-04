@@ -1,0 +1,8 @@
+[package]
+name = "nordiee-core"
+version = "0.1.0"
+edition = "2021"
+description = "Framework-independent core for Nordiee launcher operations"
+
+[lib]
+path = "src/lib.rs"
