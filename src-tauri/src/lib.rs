@@ -91,8 +91,54 @@ async fn install_game(app: AppHandle, manifest_json: String, install_root: Strin
         completed_bytes += received_for_file;
     }
 
+    let install_record = serde_json::to_vec_pretty(&manifest).map_err(|error| error.to_string())?;
+    tokio::fs::write(game_directory.join(".nordiee-install.json"), install_record)
+        .await
+        .map_err(|error| error.to_string())?;
     let _ = app.emit("game-download-complete", serde_json::json!({ "gameId": manifest.game_id, "path": game_directory }));
     Ok(serde_json::json!({ "gameId": manifest.game_id, "path": game_directory, "version": manifest.version }))
+}
+
+#[tauri::command]
+async fn verify_game(game_id: String, install_root: String) -> Result<serde_json::Value, String> {
+    if !safe_game_id(&game_id) {
+        return Err("The game identifier is invalid.".to_string());
+    }
+    let game_directory = PathBuf::from(install_root).join(&game_id);
+    let receipt = tokio::fs::read(game_directory.join(".nordiee-install.json")).await.map_err(|_| "This game is not installed by Nordiee.".to_string())?;
+    let manifest: nordiee_core::GameManifest = serde_json::from_slice(&receipt).map_err(|_| "The local installation record is invalid.".to_string())?;
+    manifest.validate().map_err(|error| error.to_string())?;
+    if manifest.game_id != game_id {
+        return Err("The local installation record does not match this game.".to_string());
+    }
+
+    let mut damaged_files = Vec::new();
+    for file in &manifest.files {
+        let path = safe_install_path(&game_directory, &file.path)?;
+        if !matches!(hash_file(&path).await, Ok(hash) if hash == file.sha256.to_ascii_lowercase()) {
+            damaged_files.push(file.path.clone());
+        }
+    }
+    Ok(serde_json::json!({
+        "gameId": game_id,
+        "version": manifest.version,
+        "verified": damaged_files.is_empty(),
+        "damagedFiles": damaged_files
+    }))
+}
+
+async fn hash_file(path: &Path) -> Result<String, String> {
+    let mut file = tokio::fs::File::open(path).await.map_err(|_| "A game file is missing.".to_string())?;
+    let mut checksum = Sha256::new();
+    let mut buffer = vec![0_u8; 1024 * 1024];
+    loop {
+        let bytes_read = tokio::io::AsyncReadExt::read(&mut file, &mut buffer).await.map_err(|error| error.to_string())?;
+        if bytes_read == 0 {
+            break;
+        }
+        checksum.update(&buffer[..bytes_read]);
+    }
+    Ok(format!("{:x}", checksum.finalize()))
 }
 
 fn safe_install_path(game_directory: &Path, relative_path: &str) -> Result<PathBuf, String> {
@@ -103,11 +149,15 @@ fn safe_install_path(game_directory: &Path, relative_path: &str) -> Result<PathB
     Ok(destination)
 }
 
+fn safe_game_id(game_id: &str) -> bool {
+    !game_id.is_empty() && game_id.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .invoke_handler(tauri::generate_handler![launcher_version, default_install_root, save_account_secret, load_account_secret, remove_account_secret, install_game])
+        .invoke_handler(tauri::generate_handler![launcher_version, default_install_root, save_account_secret, load_account_secret, remove_account_secret, install_game, verify_game])
         .run(tauri::generate_context!())
         .expect("error while running Nordiee Launcher");
 }
