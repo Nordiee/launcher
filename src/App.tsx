@@ -171,7 +171,10 @@ function Launcher({ session, onSwitchAccount, onLogOff, onRemoveAccount }: { ses
     return () => { void unlisten.then((cleanup) => cleanup()); };
   }, []);
   useEffect(() => {
-    const unlisten = listen<{ paused: boolean }>("download-transfer-state", (event) => setDownloadsPaused(event.payload.paused));
+    const unlisten = listen<{ paused?: boolean; cancelled?: boolean }>("download-transfer-state", (event) => {
+      if (event.payload.cancelled) { setDownloadsPaused(false); setDownload(null); }
+      else if (event.payload.paused !== undefined) setDownloadsPaused(event.payload.paused);
+    });
     return () => { void unlisten.then((cleanup) => cleanup()); };
   }, []);
   const toggleDownloadsPaused = async () => {
@@ -367,7 +370,8 @@ function Downloads({ download, paused, onTogglePaused }: { download: DownloadAct
   const percentage = download.totalBytes ? Math.min(100, Math.round(((download.downloadedBytes ?? 0) / download.totalBytes) * 100)) : null;
   const transferred = download.downloadedBytes && download.totalBytes ? `${Math.round(download.downloadedBytes / 1_000_000)} MB of ${Math.round(download.totalBytes / 1_000_000)} MB` : "Preparing file transfer";
   const speed = download.speedBytesPerSecond ? `${(download.speedBytesPerSecond / 1_000_000).toFixed(1)} MB/s` : "Calculating speed";
-  return <section className="downloads-panel" aria-label="Active downloads"><article className="download-card"><div className="download-card-heading"><div><p className="panel-label">{paused ? "PAUSED" : download.phase}</p><h2>{download.title}</h2></div><strong>{percentage === null ? "Starting" : `${percentage}%`}</strong></div><div className="download-progress" role="progressbar" aria-label={`${download.title} download progress`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={percentage ?? undefined}><span style={{ width: `${percentage ?? 4}%` }} /></div><div className="download-meta"><p>{paused ? "Transfer paused. Your partial download is kept safely." : transferred}</p><strong>{paused ? "Waiting" : speed}</strong></div><div className="download-controls"><button className="library-action" type="button" aria-pressed={paused} onClick={onTogglePaused}>{paused ? <><PlayIcon />Resume download</> : <><PauseIcon />Pause download</>}</button></div></article></section>;
+  const cancel = async () => { if (window.confirm(`Cancel ${download.title}? The files already downloaded will be kept for a later resume.`)) await invoke("cancel_downloads"); };
+  return <section className="downloads-panel" aria-label="Active downloads"><article className="download-card"><div className="download-card-heading"><div><p className="panel-label">{paused ? "PAUSED" : download.phase}</p><h2>{download.title}</h2></div><strong>{percentage === null ? "Starting" : `${percentage}%`}</strong></div><div className="download-progress" role="progressbar" aria-label={`${download.title} download progress`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={percentage ?? undefined}><span style={{ width: `${percentage ?? 4}%` }} /></div><div className="download-meta"><p>{paused ? "Transfer paused. Your partial download is kept safely." : transferred}</p><strong>{paused ? "Waiting" : speed}</strong></div><div className="download-controls"><button className="library-action" type="button" aria-pressed={paused} onClick={onTogglePaused}>{paused ? <><PlayIcon />Resume download</> : <><PauseIcon />Pause download</>}</button><button className="library-action download-cancel" type="button" onClick={() => void cancel()}>Cancel download</button></div></article></section>;
 }
 function EmptyState({ title, text, action }: { title: string; text: string; action: string }) { return <section className="empty-state"><div className="empty-mark" aria-hidden="true">N</div><h2>{title}</h2><p>{text}</p><button className="primary-button" type="button">{action}</button></section>; }
 function Settings() {
