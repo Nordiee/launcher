@@ -17,7 +17,7 @@ export default function App() {
   const [session, setSession] = useState<Session | null>(null);
   const [updateState, setUpdateState] = useState<UpdateState>("checking");
   useEffect(() => { void applyAvailableUpdate(setUpdateState); }, []);
-  return <div className="app-window"><Titlebar />{updateState !== "ready" ? <UpdateGate state={updateState} /> : session ? <Launcher session={session} onLogOff={() => setSession(null)} /> : <AuthScreen />}</div>;
+  return <div className="app-window"><Titlebar />{updateState !== "ready" ? <UpdateGate state={updateState} /> : session ? <Launcher session={session} onLogOff={() => setSession(null)} /> : <AuthScreen onSession={setSession} />}</div>;
 }
 
 function UpdateGate({ state }: { state: UpdateState }) { return <main className="update-gate"><img src="/logo.svg" alt="Nordiee" /><div className="update-spinner" aria-hidden="true" /><h1>{state === "checking" ? "Checking for updates" : "Updating Nordiee"}</h1><p>{state === "checking" ? "Making sure you are on the latest version." : "Installing the latest version. Nordiee will reopen automatically."}</p></main>; }
@@ -34,13 +34,20 @@ function Titlebar() {
   </header>;
 }
 
-function AuthScreen() {
+function AuthScreen({ onSession }: { onSession: (session: Session) => void }) {
   const [mode, setMode] = useState<AuthMode>("sign-in");
   const [message, setMessage] = useState("");
   const changeMode = (next: AuthMode) => { setMode(next); setMessage(""); };
-  const submit = (event: FormEvent<HTMLFormElement>) => {
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    setMessage("Nordiee account service is not connected yet. This screen will use the production account API before launcher access is enabled.");
+    const data = new FormData(event.currentTarget);
+    const payload = { email: String(data.get("email")), password: String(data.get("password")), username: mode === "sign-up" ? String(data.get("display-name")) : undefined };
+    try {
+      const response = await fetch(`https://backend-production-22c63.up.railway.app/api/v1/auth/${mode === "sign-in" ? "login" : "signup"}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.error ?? "Unable to authenticate");
+      onSession({ displayName: body.username, email: body.email });
+    } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to reach Nordiee accounts."); }
   };
   return <main className="auth-shell">
     <section className="auth-intro"><img src="/logo.svg" alt="Nordiee" className="auth-logo" /><p className="eyebrow">NORDIEE LAUNCHER</p><h1>Everything you play, in one place.</h1><p>Sign in to access your library, installations and downloads. Launcher access stays locked until an account session is verified.</p><div className="auth-status"><span /> Secure account access</div></section>
