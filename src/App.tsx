@@ -1,4 +1,4 @@
-import { FormEvent, useCallback, useEffect, useState, type ReactNode } from "react";
+import { FormEvent, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -17,6 +17,8 @@ type VerificationState = "verifying" | "verified" | "repair";
 type DownloadActivity = { gameId: string; title: string; phase: string; downloadedBytes?: number; totalBytes?: number; speedBytesPerSecond?: number; sampledAt?: number };
 type DiagnosticResult = "idle" | "checking" | "pass" | "fail";
 type NotificationKind = LauncherNotification["kind"];
+type TransferKind = "install" | "repair" | "update";
+type QueuedTransfer = { id: string; game: LibraryGame; kind: TransferKind };
 
 const API_BASE_URL = "https://api.nordiee.com/api/v1/auth";
 const LIBRARY_API_URL = "https://api.nordiee.com/api/v1/library";
@@ -270,6 +272,9 @@ function Library({ accessToken, onDownload, onNotify, runningGameIds }: { access
   const [verification, setVerification] = useState<Record<string, VerificationState>>({});
   const [updateStatus, setUpdateStatus] = useState<Record<string, string>>({});
   const [downloadProgress, setDownloadProgress] = useState<{ gameId: string; downloadedBytes: number; totalBytes: number } | null>(null);
+  const [queuedTransfers, setQueuedTransfers] = useState<QueuedTransfer[]>([]);
+  const queuedTransfersRef = useRef<QueuedTransfer[]>([]);
+  const processingTransferRef = useRef(false);
   const loadLibrary = async () => {
     setStatus("loading");
     try {
@@ -328,7 +333,7 @@ function Library({ accessToken, onDownload, onNotify, runningGameIds }: { access
     if (games.length) void findInstalledGames();
     return () => { active = false; };
   }, [accessToken, games]);
-  const install = async (game: LibraryGame) => {
+  const runInstall = async (game: LibraryGame) => {
     setInstallError("");
     setInstallingId(game.id);
     setDownloadProgress(null);
@@ -362,7 +367,7 @@ function Library({ accessToken, onDownload, onNotify, runningGameIds }: { access
       setInstallError(error instanceof Error ? error.message : "We could not verify this game.");
     }
   };
-  const repair = async (game: LibraryGame) => {
+  const runRepair = async (game: LibraryGame) => {
     setInstallError("");
     setInstallingId(game.id);
     setDownloadProgress(null);
@@ -438,7 +443,7 @@ function Library({ accessToken, onDownload, onNotify, runningGameIds }: { access
       onDownload(null);
     }
   };
-  const update = async (game: LibraryGame) => {
+  const runUpdate = async (game: LibraryGame) => {
     setInstallError("");
     setInstallingId(game.id);
     setDownloadProgress(null);
@@ -461,24 +466,49 @@ function Library({ accessToken, onDownload, onNotify, runningGameIds }: { access
       onDownload(null);
     }
   };
+  const processTransferQueue = async () => {
+    if (processingTransferRef.current) return;
+    processingTransferRef.current = true;
+    const next = queuedTransfersRef.current.shift();
+    setQueuedTransfers([...queuedTransfersRef.current]);
+    if (!next) { processingTransferRef.current = false; return; }
+    try {
+      if (next.kind === "install") await runInstall(next.game);
+      else if (next.kind === "repair") await runRepair(next.game);
+      else await runUpdate(next.game);
+    } finally {
+      processingTransferRef.current = false;
+      void processTransferQueue();
+    }
+  };
+  const enqueueTransfer = (game: LibraryGame, kind: TransferKind) => {
+    const alreadyQueued = queuedTransfersRef.current.some((transfer) => transfer.game.id === game.id);
+    if (installingId === game.id || alreadyQueued) return;
+    queuedTransfersRef.current = [...queuedTransfersRef.current, { id: crypto.randomUUID(), game, kind }];
+    setQueuedTransfers([...queuedTransfersRef.current]);
+    if (processingTransferRef.current) onNotify("Added to queue", `${game.title} will ${kind === "install" ? "install" : kind === "repair" ? "repair" : "update"} after the active transfer.`, "info");
+    void processTransferQueue();
+  };
   if (status === "loading") return <section className="library-state" aria-live="polite"><span className="library-loader" aria-hidden="true" /><h2>Loading your library</h2><p>Fetching the games connected to this account.</p></section>;
   if (status === "error") return <section className="library-state"><div className="empty-mark" aria-hidden="true">N</div><h2>We could not load your library</h2><p>Check your connection, then try again.</p><button className="primary-button" type="button" onClick={() => void loadLibrary()}>Try again</button></section>;
   const offlineNotice = status === "offline" ? <p className="offline-notice" role="status">Offline mode - showing the last library saved on this device.</p> : null;
   if (!games.length) return <>{offlineNotice}<section className="empty-state"><div className="empty-mark" aria-hidden="true">N</div><h2>Your library is ready</h2><p>Games connected to your Nordiee account will appear here.</p></section></>;
-  return <>{offlineNotice}{installError && <p className="install-error" role="alert">{installError}</p>}<section className="library-grid" aria-label="Your game library">{games.map((game) => {
+  const queueNotice = queuedTransfers.length ? <p className="queue-notice" role="status">{queuedTransfers.length} {queuedTransfers.length === 1 ? "game is" : "games are"} waiting in the transfer queue.</p> : null;
+  return <>{offlineNotice}{queueNotice}{installError && <p className="install-error" role="alert">{installError}</p>}<section className="library-grid" aria-label="Your game library">{games.map((game) => {
     const isInstalling = installingId === game.id;
+    const isQueued = queuedTransfers.some((transfer) => transfer.game.id === game.id);
     const transferInProgress = installingId !== null;
     const isInstalled = installedIds.includes(game.id) || game.installState === "INSTALLED";
     const isRunning = runningGameIds.includes(game.id);
     const percentage = isInstalling && downloadProgress?.gameId === game.id && downloadProgress.totalBytes ? Math.round((downloadProgress.downloadedBytes / downloadProgress.totalBytes) * 100) : null;
     const checkState = verification[game.id];
-    const statusLabel = isRunning ? "RUNNING" : isInstalled ? checkState === "repair" ? "REPAIR REQUIRED" : "INSTALLED" : isInstalling ? "DOWNLOADING" : game.installState;
+    const statusLabel = isRunning ? "RUNNING" : isQueued ? "QUEUED" : isInstalled ? checkState === "repair" ? "REPAIR REQUIRED" : "INSTALLED" : isInstalling ? "DOWNLOADING" : game.installState;
     const installedSize = installedSizes[game.id];
     const displaySize = installedSize ?? game.installSizeBytes;
     const detail = isInstalling && percentage !== null ? `${percentage}% downloaded` : updateStatus[game.id] ?? (checkState === "verified" ? "All installed files verified." : checkState === "repair" ? "One or more files need repair." : displaySize ? `${isInstalled ? "Installed" : "Download"} · ${(displaySize / 1_000_000_000).toFixed(1)} GB` : "Size will be available soon");
-    const primaryLabel = !isInstalled ? isInstalling ? percentage !== null ? `Downloading ${percentage}%` : "Preparing" : "Install" : checkState === "verifying" ? "Verifying" : checkState === "repair" ? isInstalling ? percentage !== null ? `Repairing ${percentage}%` : "Preparing repair" : "Repair files" : "Verify files";
-    const primaryAction = () => { if (!isInstalled) return install(game); if (checkState === "repair") return repair(game); return verify(game); };
-    return <article className="library-card" key={game.id}><div className="library-cover" aria-hidden="true">N</div><div><p className="panel-label">{statusLabel}</p><h2>{game.title}</h2><p>{detail}</p><div className="library-actions">{isInstalled && <button className="library-action play-action" type="button" disabled={transferInProgress || isRunning || checkState === "repair"} onClick={() => void play(game)}>{isRunning ? "Running" : isInstalling ? percentage !== null ? `Updating ${percentage}%` : "Checking update" : "Play"}</button>}{isInstalled && <button className="library-action" type="button" disabled={transferInProgress || isRunning || checkState === "repair"} onClick={() => void update(game)}>Check update</button>}<button className="library-action" type="button" disabled={transferInProgress || isRunning || checkState === "verifying"} onClick={() => void primaryAction()}>{primaryLabel}</button>{isInstalled && <button className="library-action" type="button" disabled={transferInProgress} onClick={() => void openFolder(game)}>Open folder</button>}{isInstalled && <button className="library-action" type="button" disabled={transferInProgress || isRunning} onClick={() => setEditingLaunchOptions(editingLaunchOptions === game.id ? null : game.id)}>Launch options</button>}{isInstalled && <button className="library-action uninstall-action" type="button" disabled={transferInProgress || isRunning} onClick={() => void uninstall(game)}>Uninstall</button>}</div>{editingLaunchOptions === game.id && <label className="launch-options"><span>Launch options</span><input value={launchOptions[game.id] ?? ""} onChange={(event) => saveLaunchOptions(game.id, event.target.value)} placeholder='Example: -windowed -log' spellCheck="false" /><small>Options are passed directly to this game only.</small></label>}</div></article>;
+    const primaryLabel = !isInstalled ? isQueued ? "Queued to install" : isInstalling ? percentage !== null ? `Downloading ${percentage}%` : "Preparing" : "Install" : checkState === "verifying" ? "Verifying" : checkState === "repair" ? isQueued ? "Queued to repair" : isInstalling ? percentage !== null ? `Repairing ${percentage}%` : "Preparing repair" : "Repair files" : "Verify files";
+    const primaryAction = () => { if (!isInstalled) return enqueueTransfer(game, "install"); if (checkState === "repair") return enqueueTransfer(game, "repair"); return verify(game); };
+    return <article className="library-card" key={game.id}><div className="library-cover" aria-hidden="true">N</div><div><p className="panel-label">{statusLabel}</p><h2>{game.title}</h2><p>{detail}</p><div className="library-actions">{isInstalled && <button className="library-action play-action" type="button" disabled={transferInProgress || isRunning || checkState === "repair"} onClick={() => void play(game)}>{isRunning ? "Running" : isInstalling ? percentage !== null ? `Updating ${percentage}%` : "Checking update" : "Play"}</button>}{isInstalled && <button className="library-action" type="button" disabled={isInstalling || isQueued || isRunning || checkState === "repair"} onClick={() => enqueueTransfer(game, "update")}>{isQueued ? "Queued" : "Check update"}</button>}<button className="library-action" type="button" disabled={isInstalling || isQueued || isRunning || checkState === "verifying"} onClick={primaryAction}>{primaryLabel}</button>{isInstalled && <button className="library-action" type="button" disabled={transferInProgress} onClick={() => void openFolder(game)}>Open folder</button>}{isInstalled && <button className="library-action" type="button" disabled={transferInProgress || isRunning} onClick={() => setEditingLaunchOptions(editingLaunchOptions === game.id ? null : game.id)}>Launch options</button>}{isInstalled && <button className="library-action uninstall-action" type="button" disabled={transferInProgress || isRunning} onClick={() => void uninstall(game)}>Uninstall</button>}</div>{editingLaunchOptions === game.id && <label className="launch-options"><span>Launch options</span><input value={launchOptions[game.id] ?? ""} onChange={(event) => saveLaunchOptions(game.id, event.target.value)} placeholder='Example: -windowed -log' spellCheck="false" /><small>Options are passed directly to this game only.</small></label>}</div></article>;
   })}</section></>;
 }
 function Downloads({ download, paused, onTogglePaused }: { download: DownloadActivity | null; paused: boolean; onTogglePaused: () => void }) {
