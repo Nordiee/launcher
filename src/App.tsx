@@ -1,17 +1,16 @@
 import { FormEvent, useEffect, useState, type ReactNode } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ArrowRightIcon, ChevronDownIcon, CloseIcon, DownloadIcon, HomeIcon, LibraryIcon, MaximizeIcon, MinimizeIcon, PlusIcon, SettingsIcon, TrashIcon } from "./Icons";
+import { activeAccountEmail, clearActiveAccount, getAccountSession, listSavedAccounts, migrateLegacyAccounts, removeSavedAccount, saveAccountSession, type AccountSecret, type SavedAccount } from "./accountStore";
 import { applyAvailableUpdate, type UpdateState } from "./updates";
 
 type View = "Home" | "Library" | "Downloads" | "Settings";
 type AuthMode = "sign-in" | "sign-up";
-type Session = { displayName: string; email: string; accessToken: string; refreshToken: string };
+type Session = SavedAccount & AccountSecret;
 type AuthResponse = { accessToken: string; refreshToken: string; username: string; email: string };
 type AccessView = "accounts" | "credentials";
 
 const API_BASE_URL = "https://api.nordiee.com/api/v1/auth";
-const SESSION_STORAGE_KEY = "nordiee.account-session.v1";
-const ACCOUNTS_STORAGE_KEY = "nordiee.accounts.v1";
 
 const navigation: { label: View; icon: ReactNode }[] = [
   { label: "Home", icon: <HomeIcon /> },
@@ -23,46 +22,9 @@ function toSession(response: AuthResponse): Session {
   return { displayName: response.username, email: response.email, accessToken: response.accessToken, refreshToken: response.refreshToken };
 }
 
-function readStoredSession(): Session | null {
-  try {
-    const value = localStorage.getItem(SESSION_STORAGE_KEY);
-    if (!value) return null;
-    const session = JSON.parse(value) as Partial<Session>;
-    if (!session.displayName || !session.email || !session.accessToken || !session.refreshToken) return null;
-    return session as Session;
-  } catch {
-    return null;
-  }
-}
-
-function readStoredAccounts(): Session[] {
-  try {
-    const rawAccounts = localStorage.getItem(ACCOUNTS_STORAGE_KEY);
-    const accounts = rawAccounts ? JSON.parse(rawAccounts) : [readStoredSession()].filter(Boolean);
-    if (!Array.isArray(accounts)) return [];
-    return accounts.filter((account): account is Session => Boolean(account?.displayName && account?.email && account?.accessToken && account?.refreshToken));
-  } catch {
-    return [];
-  }
-}
-
-function persistSession(session: Session) {
-  const accounts = readStoredAccounts().filter((account) => account.email.toLowerCase() !== session.email.toLowerCase());
-  localStorage.setItem(ACCOUNTS_STORAGE_KEY, JSON.stringify([session, ...accounts]));
-  localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session));
-}
-
-function clearActiveSession() { localStorage.removeItem(SESSION_STORAGE_KEY); }
-
-function removeStoredAccount(email: string) {
-  localStorage.setItem(ACCOUNTS_STORAGE_KEY, JSON.stringify(readStoredAccounts().filter((account) => account.email.toLowerCase() !== email.toLowerCase())));
-  const active = readStoredSession();
-  if (active?.email.toLowerCase() === email.toLowerCase()) clearActiveSession();
-}
-
 export default function App() {
   const [session, setSession] = useState<Session | null>(null);
-  const [accounts, setAccounts] = useState<Session[]>(readStoredAccounts);
+  const [accounts, setAccounts] = useState<SavedAccount[]>(listSavedAccounts);
   const [updateState, setUpdateState] = useState<UpdateState>("checking");
   const [sessionReady, setSessionReady] = useState(false);
   const [accessView, setAccessView] = useState<AccessView>(accounts.length ? "accounts" : "credentials");
@@ -70,18 +32,23 @@ export default function App() {
   useEffect(() => { void applyAvailableUpdate(setUpdateState); }, []);
   useEffect(() => {
     const restoreSession = async () => {
-      const stored = readStoredSession();
-      if (!stored) { setSessionReady(true); return; }
       try {
+        await migrateLegacyAccounts();
+        const savedAccounts = listSavedAccounts();
+        setAccounts(savedAccounts);
+        const activeEmail = activeAccountEmail();
+        if (!activeEmail) return;
+        const stored = await getAccountSession(activeEmail);
+        if (!stored) { clearActiveAccount(); return; }
         const response = await fetch(`${API_BASE_URL}/refresh`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ refreshToken: stored.refreshToken }) });
         const body = await response.json() as AuthResponse & { error?: string };
         if (!response.ok) throw new Error(body.error ?? "Session expired");
         const nextSession = toSession(body);
-        persistSession(nextSession);
-        setAccounts(readStoredAccounts());
+        await saveAccountSession(nextSession, nextSession);
+        setAccounts(listSavedAccounts());
         setSession(nextSession);
       } catch {
-        clearActiveSession();
+        clearActiveAccount();
       } finally {
         setSessionReady(true);
       }
@@ -93,19 +60,21 @@ export default function App() {
   };
   const logOff = async () => {
     const currentSession = session;
-    clearActiveSession();
+    clearActiveAccount();
     setSession(null);
     setAccessView("accounts");
     if (currentSession) await endRemoteSession(currentSession);
   };
-  const switchAccount = () => { clearActiveSession(); setSession(null); setAccessView("accounts"); };
-  const removeAccount = async (account: Session) => { removeStoredAccount(account.email); const remaining = readStoredAccounts(); setAccounts(remaining); if (session?.email === account.email) setSession(null); await endRemoteSession(account); setAccessView(remaining.length ? "accounts" : "credentials"); };
-  const startSession = (nextSession: Session) => { persistSession(nextSession); setAccounts(readStoredAccounts()); setSession(nextSession); };
-  const selectAccount = async (account: Session) => {
-    const response = await fetch(`${API_BASE_URL}/refresh`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ refreshToken: account.refreshToken }) });
+  const switchAccount = () => { clearActiveAccount(); setSession(null); setAccessView("accounts"); };
+  const removeAccount = async (account: SavedAccount) => { const savedSession = await getAccountSession(account.email); await removeSavedAccount(account.email); const remaining = listSavedAccounts(); setAccounts(remaining); if (session?.email === account.email) setSession(null); if (savedSession) await endRemoteSession(savedSession); setAccessView(remaining.length ? "accounts" : "credentials"); };
+  const startSession = async (nextSession: Session) => { await saveAccountSession(nextSession, nextSession); setAccounts(listSavedAccounts()); setSession(nextSession); };
+  const selectAccount = async (account: SavedAccount) => {
+    const savedSession = await getAccountSession(account.email);
+    if (!savedSession) { clearActiveAccount(); setPrefilledEmail(account.email); setAccessView("credentials"); return; }
+    const response = await fetch(`${API_BASE_URL}/refresh`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ refreshToken: savedSession.refreshToken }) });
     const body = await response.json() as AuthResponse & { error?: string };
-    if (!response.ok) { clearActiveSession(); setPrefilledEmail(account.email); setAccessView("credentials"); return; }
-    startSession(toSession(body));
+    if (!response.ok) { clearActiveAccount(); setPrefilledEmail(account.email); setAccessView("credentials"); return; }
+    await startSession(toSession(body));
   };
   return <div className="app-window"><Titlebar />{updateState !== "ready" ? <UpdateGate state={updateState} /> : !sessionReady ? <StartupGate /> : session ? <Launcher session={session} onSwitchAccount={switchAccount} onLogOff={logOff} onRemoveAccount={removeAccount} /> : accessView === "accounts" && accounts.length ? <AccountPicker accounts={accounts} onSelect={selectAccount} onAdd={() => setAccessView("credentials")} onRemove={removeAccount} /> : <AuthScreen initialEmail={prefilledEmail} onBack={accounts.length ? () => setAccessView("accounts") : undefined} onSession={startSession} />}</div>;
 }
@@ -129,15 +98,15 @@ function StartupScreen({ label, title, text, activeStep }: { label: string; titl
   return <main className="startup-shell"><section className="startup-card" aria-live="polite"><div className="startup-brand"><img src="/logo.svg" alt="Nordiee" /><span>NORDIEE</span></div><div className="startup-orbit" aria-hidden="true"><span /><span /><i /></div><p className="eyebrow">{label}</p><h1>{title}</h1><p className="startup-copy">{text}</p><div className="startup-steps"><div className={activeStep >= 1 ? "complete" : ""}><span>01</span><p>Check build</p></div><div className={activeStep >= 2 ? "complete" : ""}><span>02</span><p>Open launcher</p></div></div></section><p className="startup-footer">NORDIEE LAUNCHER <span>•</span> SYSTEM READY</p></main>;
 }
 
-function AccountPicker({ accounts, onSelect, onAdd, onRemove }: { accounts: Session[]; onSelect: (account: Session) => Promise<void>; onAdd: () => void; onRemove: (account: Session) => Promise<void> }) {
+function AccountPicker({ accounts, onSelect, onAdd, onRemove }: { accounts: SavedAccount[]; onSelect: (account: SavedAccount) => Promise<void>; onAdd: () => void; onRemove: (account: SavedAccount) => Promise<void> }) {
   const [busyEmail, setBusyEmail] = useState<string | null>(null);
   const [message, setMessage] = useState("");
-  const choose = async (account: Session) => { setMessage(""); setBusyEmail(account.email); try { await onSelect(account); } catch { setMessage("We could not reach Nordiee accounts. Check your connection and try again."); } finally { setBusyEmail(null); } };
-  const remove = async (account: Session) => { if (!window.confirm(`Remove ${account.displayName} from this computer?`)) return; setBusyEmail(account.email); try { await onRemove(account); } finally { setBusyEmail(null); } };
+  const choose = async (account: SavedAccount) => { setMessage(""); setBusyEmail(account.email); try { await onSelect(account); } catch { setMessage("We could not reach Nordiee accounts. Check your connection and try again."); } finally { setBusyEmail(null); } };
+  const remove = async (account: SavedAccount) => { if (!window.confirm(`Remove ${account.displayName} from this computer?`)) return; setBusyEmail(account.email); try { await onRemove(account); } finally { setBusyEmail(null); } };
   return <main className="account-picker"><section className="account-picker-card" aria-labelledby="choose-account-title"><div className="picker-heading"><img src="/logo.svg" alt="Nordiee" /><div><p className="eyebrow">NORDIEE LAUNCHER</p><h1 id="choose-account-title">Choose an account</h1><p>Accounts signed in on this computer.</p></div></div><div className="saved-accounts" role="list">{accounts.map((account) => <article className="saved-account" key={account.email} role="listitem"><button className="saved-account-main" type="button" disabled={busyEmail !== null} onClick={() => void choose(account)}><span className="account-avatar">{account.displayName[0]?.toUpperCase()}</span><span><strong>{account.displayName}</strong><small>{account.email}</small></span><ArrowRightIcon /></button><button className="remove-account" type="button" disabled={busyEmail !== null} aria-label={`Remove ${account.displayName} from this computer`} onClick={() => void remove(account)}><TrashIcon /></button>{busyEmail === account.email && <span className="account-working">Connecting</span>}</article>)}</div>{message && <p className="picker-message" role="alert">{message}</p>}<button className="add-account" type="button" onClick={onAdd}><PlusIcon />Sign in with another account</button></section></main>;
 }
 
-function AuthScreen({ initialEmail, onBack, onSession }: { initialEmail: string; onBack?: () => void; onSession: (session: Session) => void }) {
+function AuthScreen({ initialEmail, onBack, onSession }: { initialEmail: string; onBack?: () => void; onSession: (session: Session) => Promise<void> }) {
   const [mode, setMode] = useState<AuthMode>("sign-in");
   const [message, setMessage] = useState("");
   const changeMode = (next: AuthMode) => { setMode(next); setMessage(""); };
@@ -149,7 +118,7 @@ function AuthScreen({ initialEmail, onBack, onSession }: { initialEmail: string;
       const response = await fetch(`${API_BASE_URL}/${mode === "sign-in" ? "login" : "signup"}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
       const body = await response.json() as AuthResponse & { error?: string };
       if (!response.ok) throw new Error(body.error ?? "Unable to authenticate");
-      onSession(toSession(body));
+      await onSession(toSession(body));
     } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to reach Nordiee accounts."); }
   };
   return <main className="auth-shell">
@@ -164,7 +133,7 @@ function AuthScreen({ initialEmail, onBack, onSession }: { initialEmail: string;
   </main>;
 }
 
-function Launcher({ session, onSwitchAccount, onLogOff, onRemoveAccount }: { session: Session; onSwitchAccount: () => void; onLogOff: () => void; onRemoveAccount: (account: Session) => Promise<void> }) {
+function Launcher({ session, onSwitchAccount, onLogOff, onRemoveAccount }: { session: Session; onSwitchAccount: () => void; onLogOff: () => void; onRemoveAccount: (account: SavedAccount) => Promise<void> }) {
   const [view, setView] = useState<View>("Home");
   const [accountOpen, setAccountOpen] = useState(false);
   const remove = async () => { if (!window.confirm(`Remove ${session.displayName} from this computer?`)) return; await onRemoveAccount(session); };
