@@ -490,12 +490,14 @@ fn directory_size(path: &Path) -> Result<u64, String> {
 
 #[tauri::command]
 async fn diagnostics_check_endpoint(target: String) -> Result<bool, String> {
-    let url = match target.as_str() {
-        "api" => "https://api.nordiee.com/api/v1/library",
-        "downloads" => "https://downloads.nordiee.com/",
+    let (url, accepts_not_found) = match target.as_str() {
+        "api" => ("https://api.nordiee.com/health", false),
+        // The bucket root intentionally has no public listing. A 404 confirms the R2 edge is reachable.
+        "downloads" => ("https://downloads.nordiee.com/", true),
         _ => return Err("Unknown diagnostic target.".to_string()),
     };
-    Ok(reqwest::Client::new().head(url).send().await.is_ok())
+    let response = reqwest::Client::new().head(url).send().await.map_err(|error| error.to_string())?;
+    Ok(response.status().is_success() || (accepts_not_found && response.status() == reqwest::StatusCode::NOT_FOUND))
 }
 
 #[tauri::command]
