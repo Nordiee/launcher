@@ -55,12 +55,17 @@ struct DownloadControls {
     paused: AtomicBool,
     cancelled: AtomicBool,
     resumed: tokio::sync::Notify,
+    transfer_lock: tokio::sync::Mutex<()>,
 }
 
 impl DownloadControls {
-    fn new() -> Self { Self { paused: AtomicBool::new(false), cancelled: AtomicBool::new(false), resumed: tokio::sync::Notify::new() } }
+    fn new() -> Self { Self { paused: AtomicBool::new(false), cancelled: AtomicBool::new(false), resumed: tokio::sync::Notify::new(), transfer_lock: tokio::sync::Mutex::new(()) } }
 
-    fn begin_transfer(&self) { self.cancelled.store(false, Ordering::Release); }
+    async fn acquire_transfer(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        let guard = self.transfer_lock.lock().await;
+        self.cancelled.store(false, Ordering::Release);
+        guard
+    }
 
     async fn wait_for_transfer_permission(&self) -> bool {
         loop {
@@ -104,7 +109,7 @@ async fn install_game(app: AppHandle, controls: State<'_, DownloadControls>, man
     let manifest: nordiee_core::GameManifest = serde_json::from_str(&manifest_json)
         .map_err(|_| "The game build manifest is invalid.".to_string())?;
     manifest.validate().map_err(|error| error.to_string())?;
-    controls.begin_transfer();
+    let _transfer_guard = controls.acquire_transfer().await;
     download_manifest(&app, &controls, &manifest, &install_root, None, None, download_limit_mbps).await
 }
 
@@ -131,7 +136,7 @@ async fn repair_game(app: AppHandle, controls: State<'_, DownloadControls>, game
         return Ok(serde_json::json!({ "gameId": game_id, "repairedFiles": 0 }));
     }
     let repaired_files = damaged_files.len();
-    controls.begin_transfer();
+    let _transfer_guard = controls.acquire_transfer().await;
     download_manifest(&app, &controls, &manifest, &install_root, Some(&damaged_files), None, download_limit_mbps).await?;
     Ok(serde_json::json!({ "gameId": game_id, "repairedFiles": repaired_files }))
 }
@@ -156,7 +161,7 @@ async fn update_game(app: AppHandle, controls: State<'_, DownloadControls>, mani
     let changed_file_count = changed_files.len();
     let next_paths: HashSet<&str> = manifest.files.iter().map(|file| file.path.as_str()).collect();
     let stale_files: HashSet<String> = previous_manifest.files.iter().filter(|file| !next_paths.contains(file.path.as_str())).map(|file| file.path.clone()).collect();
-    controls.begin_transfer();
+    let _transfer_guard = controls.acquire_transfer().await;
     download_manifest(&app, &controls, &manifest, &install_root, Some(&changed_files), Some(&stale_files), download_limit_mbps).await?;
     Ok(serde_json::json!({ "gameId": manifest.game_id, "version": manifest.version, "changedFiles": changed_file_count }))
 }
