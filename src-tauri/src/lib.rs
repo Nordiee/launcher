@@ -369,6 +369,38 @@ async fn installed_game_size(game_id: String, install_root: String) -> Result<Op
 }
 
 #[tauri::command]
+async fn move_game(game_id: String, source_root: String, destination_root: String) -> Result<serde_json::Value, String> {
+    if !safe_game_id(&game_id) {
+        return Err("The game identifier is invalid.".to_string());
+    }
+    let source_root = PathBuf::from(source_root);
+    let destination_root = PathBuf::from(destination_root);
+    if source_root == destination_root {
+        return Err("Choose a different library location.".to_string());
+    }
+    let source = source_root.join(&game_id);
+    let destination = destination_root.join(&game_id);
+    if !source.starts_with(&source_root) || !destination.starts_with(&destination_root) {
+        return Err("The game installation path is invalid.".to_string());
+    }
+    let receipt = tokio::fs::read(source.join(".nordiee-install.json")).await.map_err(|_| "This game is not installed by Nordiee.".to_string())?;
+    let manifest: nordiee_core::GameManifest = serde_json::from_slice(&receipt).map_err(|_| "The local installation record is invalid.".to_string())?;
+    manifest.validate().map_err(|error| error.to_string())?;
+    if manifest.game_id != game_id {
+        return Err("The local installation record does not match this game.".to_string());
+    }
+    if tokio::fs::try_exists(&destination).await.map_err(|error| error.to_string())? {
+        return Err("That library already contains this game.".to_string());
+    }
+    let source_for_move = source.clone();
+    let destination_for_move = destination.clone();
+    let destination_root_for_move = destination_root.clone();
+    let bytes = tokio::task::spawn_blocking(move || move_directory(&source_for_move, &destination_root_for_move, &destination_for_move))
+        .await.map_err(|error| error.to_string())??;
+    Ok(serde_json::json!({ "gameId": game_id, "bytesMoved": bytes, "destinationRoot": destination_root }))
+}
+
+#[tauri::command]
 async fn uninstall_game(game_id: String, install_root: String) -> Result<(), String> {
     if !safe_game_id(&game_id) {
         return Err("The game identifier is invalid.".to_string());
@@ -515,6 +547,40 @@ mod tests {
     }
 }
 
+fn move_directory(source: &Path, destination_root: &Path, destination: &Path) -> Result<u64, String> {
+    std::fs::create_dir_all(destination_root).map_err(|error| error.to_string())?;
+    let bytes = directory_size(source)?;
+    let available = fs2::available_space(destination_root).map_err(|error| error.to_string())?;
+    if available < bytes {
+        return Err(format!("Not enough free disk space. Nordiee needs {} more MB.", (bytes - available).div_ceil(1_000_000)));
+    }
+    match std::fs::rename(source, destination) {
+        Ok(()) => Ok(bytes),
+        Err(error) if error.kind() == std::io::ErrorKind::CrossesDevices => {
+            let staging = destination.with_extension("nordiee-moving");
+            if staging.exists() { return Err("A previous move is still waiting to be cleaned up.".to_string()); }
+            copy_directory(source, &staging)?;
+            std::fs::rename(&staging, destination).map_err(|rename_error| rename_error.to_string())?;
+            std::fs::remove_dir_all(source).map_err(|remove_error| remove_error.to_string())?;
+            Ok(bytes)
+        }
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+fn copy_directory(source: &Path, destination: &Path) -> Result<(), String> {
+    std::fs::create_dir_all(destination).map_err(|error| error.to_string())?;
+    for entry in std::fs::read_dir(source).map_err(|error| error.to_string())? {
+        let entry = entry.map_err(|error| error.to_string())?;
+        let file_type = entry.file_type().map_err(|error| error.to_string())?;
+        if file_type.is_symlink() { return Err("Game installation contains an unsupported symbolic link.".to_string()); }
+        let target = destination.join(entry.file_name());
+        if file_type.is_dir() { copy_directory(&entry.path(), &target)?; }
+        else if file_type.is_file() { std::fs::copy(entry.path(), target).map_err(|error| error.to_string())?; }
+    }
+    Ok(())
+}
+
 fn directory_size(path: &Path) -> Result<u64, String> {
     let mut total = 0_u64;
     for entry in std::fs::read_dir(path).map_err(|error| error.to_string())? {
@@ -577,7 +643,7 @@ pub fn run() {
         .manage(DownloadControls::new())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .invoke_handler(tauri::generate_handler![launcher_version, default_install_root, install_location_free_space, launch_at_startup_enabled, set_launch_at_startup, save_account_secret, load_account_secret, remove_account_secret, install_game, repair_game, update_game, pause_downloads, resume_downloads, cancel_downloads, verify_game, installed_game_version, installed_game_size, uninstall_game, open_game_folder, launch_game, diagnostics_check_endpoint, diagnostics_check_install_root, export_diagnostic_report])
+        .invoke_handler(tauri::generate_handler![launcher_version, default_install_root, install_location_free_space, launch_at_startup_enabled, set_launch_at_startup, save_account_secret, load_account_secret, remove_account_secret, install_game, repair_game, update_game, pause_downloads, resume_downloads, cancel_downloads, verify_game, installed_game_version, installed_game_size, move_game, uninstall_game, open_game_folder, launch_game, diagnostics_check_endpoint, diagnostics_check_install_root, export_diagnostic_report])
         .run(tauri::generate_context!())
         .expect("error while running Nordiee Launcher");
 }
