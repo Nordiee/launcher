@@ -18,8 +18,10 @@ type VerificationState = "verifying" | "verified" | "repair";
 type DownloadActivity = { gameId: string; title: string; phase: string; downloadedBytes?: number; totalBytes?: number; speedBytesPerSecond?: number; sampledAt?: number };
 type DiagnosticResult = "idle" | "checking" | "pass" | "fail";
 type NotificationKind = LauncherNotification["kind"];
+type ServiceStatus = "checking" | "operational" | "unavailable";
 const API_BASE_URL = "https://api.nordiee.com/api/v1/auth";
 const LIBRARY_API_URL = "https://api.nordiee.com/api/v1/library";
+const HEALTH_API_URL = "https://api.nordiee.com/health";
 
 async function installRoot() {
   const saved = localStorage.getItem("nordiee.installRoot");
@@ -188,6 +190,7 @@ function Launcher({ session, onSwitchAccount, onLogOff, onRemoveAccount }: { ses
   const [notifications, setNotifications] = useState<LauncherNotification[]>(readNotifications);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [queuedTransfers, setQueuedTransfers] = useState<QueuedTransfer[]>(readTransferQueue);
+  const [serviceStatus, setServiceStatus] = useState<ServiceStatus>("checking");
   const addNotification = useCallback((title: string, message: string, kind: NotificationKind = "info") => setNotifications((current) => {
     const next = [{ id: crypto.randomUUID(), title, message, kind, createdAt: Date.now(), read: false }, ...current].slice(0, 30);
     saveNotifications(next);
@@ -215,6 +218,21 @@ function Launcher({ session, onSwitchAccount, onLogOff, onRemoveAccount }: { ses
   }, []);
   useEffect(() => listenForTransferQueue(setQueuedTransfers), []);
   useEffect(() => {
+    let active = true;
+    const checkHealth = async () => {
+      try {
+        const response = await fetch(HEALTH_API_URL, { cache: "no-store" });
+        if (!response.ok) throw new Error("Health check failed");
+        if (active) setServiceStatus("operational");
+      } catch {
+        if (active) setServiceStatus("unavailable");
+      }
+    };
+    void checkHealth();
+    const interval = window.setInterval(() => void checkHealth(), 60_000);
+    return () => { active = false; window.clearInterval(interval); };
+  }, []);
+  useEffect(() => {
     const unlisten = listen<{ paused?: boolean; cancelled?: boolean }>("download-transfer-state", (event) => {
       if (event.payload.cancelled) { setDownloadsPaused(false); setDownload(null); }
       else if (event.payload.paused !== undefined) setDownloadsPaused(event.payload.paused);
@@ -239,7 +257,8 @@ function Launcher({ session, onSwitchAccount, onLogOff, onRemoveAccount }: { ses
   };
   const remove = async () => { if (!window.confirm(`Remove ${session.displayName} from this computer?`)) return; await onRemoveAccount(session); };
   const unreadCount = notifications.filter((notification) => !notification.read).length;
-  return <div className="launcher-shell"><a className="skip-link" href="#main-content">Skip to content</a><aside className="sidebar" aria-label="Launcher navigation"><div className="sidebar-brand"><img src="/logo.svg" alt="Nordiee" /><span>NORDIEE</span></div><nav className="navigation">{navigation.map((item) => <button className={view === item.label ? "nav-item active" : "nav-item"} key={item.label} onClick={() => setView(item.label)} type="button"><span className="nav-icon">{item.icon}</span>{item.label}</button>)}</nav><div className="sidebar-bottom"><button className={view === "Settings" ? "nav-item active" : "nav-item"} onClick={() => setView("Settings")} type="button"><span className="nav-icon"><SettingsIcon /></span>Settings</button><div className="account-menu"><button className="profile" type="button" aria-expanded={accountOpen} aria-haspopup="menu" onClick={() => setAccountOpen(!accountOpen)}><span className="avatar">{session.displayName[0]?.toUpperCase()}</span><span><strong>{session.displayName}</strong><small>{session.email}</small></span><ChevronDownIcon size={15} /></button>{accountOpen && <div className="account-popover" role="menu"><button type="button" role="menuitem" onClick={onSwitchAccount}>Switch account</button><button type="button" role="menuitem" onClick={() => void onLogOff()}>Log off</button><button className="danger-action" type="button" role="menuitem" onClick={() => void remove()}>Remove this account</button></div>}</div></div></aside><main id="main-content" className="content" tabIndex={-1}><header className="topbar"><div><p className="eyebrow">NORDIEE LAUNCHER</p><h1>{view}</h1></div><div className="topbar-actions"><div className="service-status"><span /> All systems operational</div><NotificationCenter notifications={notifications} open={notificationsOpen} unreadCount={unreadCount} onToggle={() => { const next = !notificationsOpen; setNotificationsOpen(next); if (next) markNotificationsRead(); }} onClear={clearNotifications} /></div></header>{view === "Home" && <Home download={download} onOpenLibrary={() => setView("Library")} onOpenDownloads={() => setView("Downloads")} />}{view === "Library" && <Library accessToken={session.accessToken} onDownload={setDownload} onNotify={addNotification} runningGameIds={runningGameIds} />}{view === "Downloads" && <Downloads download={download} queuedTransfers={queuedTransfers} paused={downloadsPaused} onTogglePaused={() => void toggleDownloadsPaused()} />}{view === "Settings" && <Settings />}</main></div>;
+  const serviceLabel = serviceStatus === "checking" ? "Checking services" : serviceStatus === "operational" ? "Nordiee API online" : "Nordiee API unavailable";
+  return <div className="launcher-shell"><a className="skip-link" href="#main-content">Skip to content</a><aside className="sidebar" aria-label="Launcher navigation"><div className="sidebar-brand"><img src="/logo.svg" alt="Nordiee" /><span>NORDIEE</span></div><nav className="navigation">{navigation.map((item) => <button className={view === item.label ? "nav-item active" : "nav-item"} key={item.label} onClick={() => setView(item.label)} type="button"><span className="nav-icon">{item.icon}</span>{item.label}</button>)}</nav><div className="sidebar-bottom"><button className={view === "Settings" ? "nav-item active" : "nav-item"} onClick={() => setView("Settings")} type="button"><span className="nav-icon"><SettingsIcon /></span>Settings</button><div className="account-menu"><button className="profile" type="button" aria-expanded={accountOpen} aria-haspopup="menu" onClick={() => setAccountOpen(!accountOpen)}><span className="avatar">{session.displayName[0]?.toUpperCase()}</span><span><strong>{session.displayName}</strong><small>{session.email}</small></span><ChevronDownIcon size={15} /></button>{accountOpen && <div className="account-popover" role="menu"><button type="button" role="menuitem" onClick={onSwitchAccount}>Switch account</button><button type="button" role="menuitem" onClick={() => void onLogOff()}>Log off</button><button className="danger-action" type="button" role="menuitem" onClick={() => void remove()}>Remove this account</button></div>}</div></div></aside><main id="main-content" className="content" tabIndex={-1}><header className="topbar"><div><p className="eyebrow">NORDIEE LAUNCHER</p><h1>{view}</h1></div><div className="topbar-actions"><div className={`service-status ${serviceStatus}`} role="status"><span /> {serviceLabel}</div><NotificationCenter notifications={notifications} open={notificationsOpen} unreadCount={unreadCount} onToggle={() => { const next = !notificationsOpen; setNotificationsOpen(next); if (next) markNotificationsRead(); }} onClear={clearNotifications} /></div></header>{view === "Home" && <Home download={download} onOpenLibrary={() => setView("Library")} onOpenDownloads={() => setView("Downloads")} />}{view === "Library" && <Library accessToken={session.accessToken} onDownload={setDownload} onNotify={addNotification} runningGameIds={runningGameIds} />}{view === "Downloads" && <Downloads download={download} queuedTransfers={queuedTransfers} paused={downloadsPaused} onTogglePaused={() => void toggleDownloadsPaused()} />}{view === "Settings" && <Settings />}</main></div>;
 }
 
 function NotificationCenter({ notifications, open, unreadCount, onToggle, onClear }: { notifications: LauncherNotification[]; open: boolean; unreadCount: number; onToggle: () => void; onClear: () => void }) {
