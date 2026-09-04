@@ -18,3 +18,8 @@ export function recordRecentGame(accountEmail: string, game: Omit<RecentGame, "l
   localStorage.setItem(storageKey(accountEmail), JSON.stringify(next));
   return next;
 }
+
+export function clearRecentGames(accountEmail: string) {
+  localStorage.removeItem(storageKey(accountEmail));
+  return [];
+}
