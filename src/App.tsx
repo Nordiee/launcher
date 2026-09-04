@@ -88,6 +88,18 @@ export default function App() {
   };
   const switchAccount = () => { clearActiveAccount(); setSession(null); setAccessView("accounts"); };
   const removeAccount = async (account: SavedAccount) => { const savedSession = await getAccountSession(account.email); await removeSavedAccount(account.email); const remaining = listSavedAccounts(); setAccounts(remaining); if (session?.email === account.email) setSession(null); if (savedSession) await endRemoteSession(savedSession); setAccessView(remaining.length ? "accounts" : "credentials"); };
+  const removeAllAccounts = async () => {
+    const savedAccounts = listSavedAccounts();
+    for (const account of savedAccounts) {
+      const savedSession = await getAccountSession(account.email);
+      await removeSavedAccount(account.email);
+      if (savedSession) await endRemoteSession(savedSession);
+    }
+    clearActiveAccount();
+    setAccounts([]);
+    setSession(null);
+    setAccessView("credentials");
+  };
   const startSession = async (nextSession: Session) => { await saveAccountSession(nextSession, nextSession); setAccounts(listSavedAccounts()); setSession(nextSession); };
   const selectAccount = async (account: SavedAccount) => {
     const savedSession = await getAccountSession(account.email);
@@ -97,7 +109,7 @@ export default function App() {
     if (!response.ok) { clearActiveAccount(); setPrefilledEmail(account.email); setAccessView("credentials"); return; }
     await startSession(toSession(body));
   };
-  return <div className="app-window"><Titlebar />{updateState !== "ready" ? <UpdateGate state={updateState} /> : !sessionReady ? <StartupGate /> : session ? <Launcher session={session} onSwitchAccount={switchAccount} onLogOff={logOff} onRemoveAccount={removeAccount} /> : accessView === "accounts" && accounts.length ? <AccountPicker accounts={accounts} onSelect={selectAccount} onAdd={() => setAccessView("credentials")} onRemove={removeAccount} /> : <AuthScreen initialEmail={prefilledEmail} onBack={accounts.length ? () => setAccessView("accounts") : undefined} onSession={startSession} />}</div>;
+  return <div className="app-window"><Titlebar />{updateState !== "ready" ? <UpdateGate state={updateState} /> : !sessionReady ? <StartupGate /> : session ? <Launcher session={session} onSwitchAccount={switchAccount} onLogOff={logOff} onRemoveAccount={removeAccount} /> : accessView === "accounts" && accounts.length ? <AccountPicker accounts={accounts} onSelect={selectAccount} onAdd={() => setAccessView("credentials")} onRemove={removeAccount} onRemoveAll={removeAllAccounts} /> : <AuthScreen initialEmail={prefilledEmail} onBack={accounts.length ? () => setAccessView("accounts") : undefined} onSession={startSession} />}</div>;
 }
 
 function UpdateGate({ state }: { state: UpdateState }) { return <StartupScreen label={state === "checking" ? "STARTUP CHECK" : "UPDATE READY"} title={state === "checking" ? "Preparing Nordiee" : "Installing the latest build"} text={state === "checking" ? "Checking your launcher version before we let you in." : "Your update is being verified and installed. Nordiee will reopen automatically."} activeStep={state === "checking" ? 1 : 2} />; }
@@ -119,12 +131,15 @@ function StartupScreen({ label, title, text, activeStep }: { label: string; titl
   return <main className="startup-shell"><section className="startup-card" aria-live="polite"><div className="startup-brand"><img src="/logo.svg" alt="Nordiee" /><span>NORDIEE</span></div><div className="startup-orbit" aria-hidden="true"><span /><span /><i /></div><p className="eyebrow">{label}</p><h1>{title}</h1><p className="startup-copy">{text}</p><div className="startup-steps"><div className={activeStep >= 1 ? "complete" : ""}><span>01</span><p>Check build</p></div><div className={activeStep >= 2 ? "complete" : ""}><span>02</span><p>Open launcher</p></div></div></section><p className="startup-footer">NORDIEE LAUNCHER <span>•</span> SYSTEM READY</p></main>;
 }
 
-function AccountPicker({ accounts, onSelect, onAdd, onRemove }: { accounts: SavedAccount[]; onSelect: (account: SavedAccount) => Promise<void>; onAdd: () => void; onRemove: (account: SavedAccount) => Promise<void> }) {
+function AccountPicker({ accounts, onSelect, onAdd, onRemove, onRemoveAll }: { accounts: SavedAccount[]; onSelect: (account: SavedAccount) => Promise<void>; onAdd: () => void; onRemove: (account: SavedAccount) => Promise<void>; onRemoveAll: () => Promise<void> }) {
   const [busyEmail, setBusyEmail] = useState<string | null>(null);
+  const [removingAll, setRemovingAll] = useState(false);
   const [message, setMessage] = useState("");
   const choose = async (account: SavedAccount) => { setMessage(""); setBusyEmail(account.email); try { await onSelect(account); } catch { setMessage("We could not reach Nordiee accounts. Check your connection and try again."); } finally { setBusyEmail(null); } };
   const remove = async (account: SavedAccount) => { if (!window.confirm(`Remove ${account.displayName} from this computer?`)) return; setBusyEmail(account.email); try { await onRemove(account); } finally { setBusyEmail(null); } };
-  return <main className="account-picker"><section className="account-picker-card" aria-labelledby="choose-account-title"><div className="picker-heading"><img src="/logo.svg" alt="Nordiee" /><div><p className="eyebrow">NORDIEE LAUNCHER</p><h1 id="choose-account-title">Choose an account</h1><p>Accounts signed in on this computer.</p></div></div><div className="saved-accounts" role="list">{accounts.map((account) => <article className="saved-account" key={account.email} role="listitem"><button className="saved-account-main" type="button" disabled={busyEmail !== null} onClick={() => void choose(account)}><span className="account-avatar">{account.displayName[0]?.toUpperCase()}</span><span><strong>{account.displayName}</strong><small>{account.email}</small></span><ArrowRightIcon /></button><button className="remove-account" type="button" disabled={busyEmail !== null} aria-label={`Remove ${account.displayName} from this computer`} onClick={() => void remove(account)}><TrashIcon /></button>{busyEmail === account.email && <span className="account-working">Connecting</span>}</article>)}</div>{message && <p className="picker-message" role="alert">{message}</p>}<button className="add-account" type="button" onClick={onAdd}><PlusIcon />Sign in with another account</button></section></main>;
+  const removeAll = async () => { if (!window.confirm("Remove every Nordiee account from this computer? You will need to sign in again.")) return; setRemovingAll(true); try { await onRemoveAll(); } finally { setRemovingAll(false); } };
+  const busy = busyEmail !== null || removingAll;
+  return <main className="account-picker"><section className="account-picker-card" aria-labelledby="choose-account-title"><div className="picker-heading"><img src="/logo.svg" alt="Nordiee" /><div><p className="eyebrow">NORDIEE LAUNCHER</p><h1 id="choose-account-title">Choose an account</h1><p>Accounts signed in on this computer.</p></div></div><div className="saved-accounts" role="list">{accounts.map((account) => <article className="saved-account" key={account.email} role="listitem"><button className="saved-account-main" type="button" disabled={busy} onClick={() => void choose(account)}><span className="account-avatar">{account.displayName[0]?.toUpperCase()}</span><span><strong>{account.displayName}</strong><small>{account.email}</small></span><ArrowRightIcon /></button><button className="remove-account" type="button" disabled={busy} aria-label={`Remove ${account.displayName} from this computer`} onClick={() => void remove(account)}><TrashIcon /></button>{busyEmail === account.email && <span className="account-working">Connecting</span>}</article>)}</div>{message && <p className="picker-message" role="alert">{message}</p>}<button className="add-account" type="button" disabled={busy} onClick={onAdd}><PlusIcon />Sign in with another account</button><button className="remove-all-accounts" type="button" disabled={busy} onClick={() => void removeAll()}>{removingAll ? "Removing accounts" : "Remove all accounts from this computer"}</button></section></main>;
 }
 
 function AuthScreen({ initialEmail, onBack, onSession }: { initialEmail: string; onBack?: () => void; onSession: (session: Session) => Promise<void> }) {
