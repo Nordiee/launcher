@@ -105,7 +105,7 @@ async fn install_game(app: AppHandle, controls: State<'_, DownloadControls>, man
         .map_err(|_| "The game build manifest is invalid.".to_string())?;
     manifest.validate().map_err(|error| error.to_string())?;
     controls.begin_transfer();
-    download_manifest(&app, &controls, &manifest, &install_root, None, download_limit_mbps).await
+    download_manifest(&app, &controls, &manifest, &install_root, None, None, download_limit_mbps).await
 }
 
 #[tauri::command]
@@ -132,7 +132,7 @@ async fn repair_game(app: AppHandle, controls: State<'_, DownloadControls>, game
     }
     let repaired_files = damaged_files.len();
     controls.begin_transfer();
-    download_manifest(&app, &controls, &manifest, &install_root, Some(&damaged_files), download_limit_mbps).await?;
+    download_manifest(&app, &controls, &manifest, &install_root, Some(&damaged_files), None, download_limit_mbps).await?;
     Ok(serde_json::json!({ "gameId": game_id, "repairedFiles": repaired_files }))
 }
 
@@ -142,9 +142,10 @@ async fn update_game(app: AppHandle, controls: State<'_, DownloadControls>, mani
         .map_err(|_| "The game build manifest is invalid.".to_string())?;
     manifest.validate().map_err(|error| error.to_string())?;
     let game_directory = PathBuf::from(&install_root).join(&manifest.game_id);
-    if !tokio::fs::try_exists(game_directory.join(".nordiee-install.json")).await.map_err(|error| error.to_string())? {
-        return Err("This game is not installed by Nordiee.".to_string());
-    }
+    let previous_receipt = tokio::fs::read(game_directory.join(".nordiee-install.json")).await.map_err(|_| "This game is not installed by Nordiee.".to_string())?;
+    let previous_manifest: nordiee_core::GameManifest = serde_json::from_slice(&previous_receipt).map_err(|_| "The local installation record is invalid.".to_string())?;
+    previous_manifest.validate().map_err(|error| error.to_string())?;
+    if previous_manifest.game_id != manifest.game_id { return Err("The local installation record does not match this game.".to_string()); }
     let mut changed_files = HashSet::new();
     for file in &manifest.files {
         let path = safe_install_path(&game_directory, &file.path)?;
@@ -153,12 +154,14 @@ async fn update_game(app: AppHandle, controls: State<'_, DownloadControls>, mani
         }
     }
     let changed_file_count = changed_files.len();
+    let next_paths: HashSet<&str> = manifest.files.iter().map(|file| file.path.as_str()).collect();
+    let stale_files: HashSet<String> = previous_manifest.files.iter().filter(|file| !next_paths.contains(file.path.as_str())).map(|file| file.path.clone()).collect();
     controls.begin_transfer();
-    download_manifest(&app, &controls, &manifest, &install_root, Some(&changed_files), download_limit_mbps).await?;
+    download_manifest(&app, &controls, &manifest, &install_root, Some(&changed_files), Some(&stale_files), download_limit_mbps).await?;
     Ok(serde_json::json!({ "gameId": manifest.game_id, "version": manifest.version, "changedFiles": changed_file_count }))
 }
 
-async fn download_manifest(app: &AppHandle, controls: &DownloadControls, manifest: &nordiee_core::GameManifest, install_root: &str, selected_files: Option<&HashSet<String>>, download_limit_mbps: Option<u64>) -> Result<serde_json::Value, String> {
+async fn download_manifest(app: &AppHandle, controls: &DownloadControls, manifest: &nordiee_core::GameManifest, install_root: &str, selected_files: Option<&HashSet<String>>, stale_files: Option<&HashSet<String>>, download_limit_mbps: Option<u64>) -> Result<serde_json::Value, String> {
     let game_directory = PathBuf::from(install_root).join(&manifest.game_id);
     tokio::fs::create_dir_all(&game_directory).await.map_err(|error| error.to_string())?;
     let total_bytes = manifest.files.iter().filter(|file| selected_files.map_or(true, |selected| selected.contains(&file.path))).map(|file| file.size).sum::<u64>();
@@ -221,6 +224,15 @@ async fn download_manifest(app: &AppHandle, controls: &DownloadControls, manifes
         }
         tokio::fs::rename(&partial_path, &final_path).await.map_err(|error| error.to_string())?;
         completed_bytes += received_for_file;
+    }
+
+    for stale_file in stale_files.into_iter().flatten() {
+        let stale_path = safe_install_path(&game_directory, stale_file)?;
+        match tokio::fs::remove_file(&stale_path).await {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(format!("Could not remove obsolete game file {}: {error}", stale_file)),
+        }
     }
 
     let install_record = serde_json::to_vec_pretty(&manifest).map_err(|error| error.to_string())?;
