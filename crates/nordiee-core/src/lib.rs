@@ -14,6 +14,8 @@ pub const LAUNCHER_CORE_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub struct GameManifest {
     pub game_id: String,
     pub version: String,
+    #[serde(rename = "launchExecutable")]
+    pub launch_executable: String,
     pub files: Vec<ManifestFile>,
 }
 
@@ -36,6 +38,9 @@ impl GameManifest {
         if self.version.trim().is_empty() {
             return Err("manifest version cannot be empty");
         }
+        if !is_safe_relative_path(&self.launch_executable) {
+            return Err("manifest launch executable must be a safe relative path");
+        }
         if self.files.is_empty() {
             return Err("manifest must include at least one file");
         }
@@ -47,13 +52,7 @@ impl GameManifest {
 }
 
 fn validate_manifest_file(file: &ManifestFile) -> Result<(), &'static str> {
-    let normalized_path = file.path.replace('\\', "/");
-    if normalized_path.is_empty()
-        || normalized_path.starts_with('/')
-        || normalized_path.starts_with("//")
-        || normalized_path.split('/').any(|part| part.is_empty() || part == "." || part == "..")
-        || normalized_path.as_bytes().get(1) == Some(&b':')
-    {
+    if !is_safe_relative_path(&file.path) {
         return Err("manifest file path must be a safe relative path");
     }
     if file.size == 0 {
@@ -67,6 +66,15 @@ fn validate_manifest_file(file: &ManifestFile) -> Result<(), &'static str> {
         return Err("manifest file source URL must be an HTTPS URL");
     }
     Ok(())
+}
+
+fn is_safe_relative_path(path: &str) -> bool {
+    let normalized_path = path.replace('\\', "/");
+    !normalized_path.is_empty()
+        && !normalized_path.starts_with('/')
+        && !normalized_path.starts_with("//")
+        && !normalized_path.split('/').any(|part| part.is_empty() || part == "." || part == "..")
+        && normalized_path.as_bytes().get(1) != Some(&b':')
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -236,6 +244,7 @@ mod tests {
         let manifest = GameManifest {
             game_id: "../outside".into(),
             version: "0.1.0".into(),
+            launch_executable: "Game.exe".into(),
             files: vec![ManifestFile {
                 path: "Game.exe".into(),
                 size: 42,
@@ -264,6 +273,7 @@ mod tests {
         let manifest = GameManifest {
             game_id: "nordiee-demo".into(),
             version: "0.1.0".into(),
+            launch_executable: "Game/Game.exe".into(),
             files: vec![ManifestFile {
                 path: "Game/Content/pak01.pak".into(),
                 size: 42,
@@ -279,6 +289,7 @@ mod tests {
         let manifest = GameManifest {
             game_id: "nordiee-demo".into(),
             version: "0.1.0".into(),
+            launch_executable: "Game/Game.exe".into(),
             files: vec![ManifestFile {
                 path: "../Windows/System32/file.dll".into(),
                 size: 42,
@@ -294,6 +305,7 @@ mod tests {
         let manifest = GameManifest {
             game_id: "nordiee-demo".into(),
             version: "0.1.0".into(),
+            launch_executable: "Game.exe".into(),
             files: vec![ManifestFile { path: "Game.exe".into(), size: 42, sha256: "not-a-hash".into(), source_url: "https://downloads.nordiee.com/games/nordiee-demo/0.1.0/Game.exe".into() }],
         };
         assert_eq!(manifest.validate(), Err("manifest file hash must be a SHA-256 hex digest"));
@@ -304,6 +316,7 @@ mod tests {
         let manifest = GameManifest {
             game_id: "nordiee-demo".into(),
             version: "0.1.0".into(),
+            launch_executable: "Game.exe".into(),
             files: vec![ManifestFile {
                 path: "Game.exe".into(),
                 size: 42,
@@ -312,6 +325,22 @@ mod tests {
             }],
         };
         assert_eq!(manifest.validate(), Err("manifest file source URL must be an HTTPS URL"));
+    }
+
+    #[test]
+    fn rejects_an_unsafe_launch_executable() {
+        let manifest = GameManifest {
+            game_id: "nordiee-demo".into(),
+            version: "0.1.0".into(),
+            launch_executable: "../outside.exe".into(),
+            files: vec![ManifestFile {
+                path: "Game.exe".into(),
+                size: 42,
+                sha256: "a".repeat(64),
+                source_url: "https://downloads.nordiee.com/games/nordiee-demo/0.1.0/Game.exe".into(),
+            }],
+        };
+        assert_eq!(manifest.validate(), Err("manifest launch executable must be a safe relative path"));
     }
 
     #[test]
