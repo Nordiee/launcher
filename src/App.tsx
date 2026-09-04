@@ -567,6 +567,19 @@ function Library({ accessToken, favoriteGameIds, recentGames, searchRequest, pla
     return next;
   });
   const rootForGame = async (gameId: string) => gameInstallRoots[gameId] ?? installRoot();
+  useEffect(() => {
+    const handleLocatedInstallation = (event: Event) => {
+      const detail = (event as CustomEvent<{ gameId: string; root: string }>).detail;
+      if (!detail?.gameId || !detail.root) return;
+      saveGameInstallRoot(detail.gameId, detail.root);
+      setInstalledIds((current) => [...new Set([...current, detail.gameId])]);
+      void invoke<number | null>("installed_game_size", { gameId: detail.gameId, installRoot: detail.root }).then((size) => {
+        if (size !== null) setInstalledSizes((current) => ({ ...current, [detail.gameId]: size }));
+      });
+    };
+    window.addEventListener("nordiee-existing-installation-located", handleLocatedInstallation);
+    return () => window.removeEventListener("nordiee-existing-installation-located", handleLocatedInstallation);
+  }, [email]);
   const loadLibrary = async () => {
     setStatus("loading");
     try {
@@ -886,16 +899,18 @@ function InstallDialog({ game, root, freeBytes, onCancel, onConfirm }: { game: L
   const requiredBytes = game.installSizeBytes ?? 0;
   const hasSpace = availableBytes >= requiredBytes;
   const gigabytes = (bytes: number) => `${(bytes / 1_000_000_000).toFixed(1)} GB`;
-  const addLocation = () => {
+  const addLocation = async () => {
     const next = customRoot.trim();
     if (!next) return;
     rememberInstallRoot(next);
     setRoots((current) => [...new Set([...current, next])]);
     setSelectedRoot(next);
     setCustomRoot("");
+    const version = await invoke<string | null>("installed_game_version", { gameId: game.id, installRoot: next }).catch(() => null);
+    if (version) window.dispatchEvent(new CustomEvent("nordiee-existing-installation-located", { detail: { gameId: game.id, root: next } }));
   };
   const queueInstall = () => { localStorage.setItem("nordiee.installRoot", selectedRoot); rememberInstallRoot(selectedRoot); onConfirm(); };
-  return <div className="install-dialog-overlay" role="presentation" onMouseDown={onCancel}><section className="install-dialog" role="dialog" aria-modal="true" aria-labelledby="install-dialog-title" onMouseDown={(event) => event.stopPropagation()}><p className="eyebrow">INSTALL GAME</p><h2 id="install-dialog-title">Install {game.title}</h2><p className="install-dialog-copy">Choose a library location. Nordiee verifies files during download and keeps partial files if the transfer is paused.</p><dl><div><dt>Location</dt><dd><select value={selectedRoot} onChange={(event) => setSelectedRoot(event.target.value)} aria-label="Install location">{roots.map((location) => <option key={location} value={location}>{location}</option>)}</select></dd></div><div><dt>Required</dt><dd>{requiredBytes ? gigabytes(requiredBytes) : "Size pending"}</dd></div><div><dt>Available</dt><dd className={hasSpace ? "space-ready" : "space-low"}>{gigabytes(availableBytes)}</dd></div></dl><div className="install-location-add"><label>Add another location<input value={customRoot} onChange={(event) => setCustomRoot(event.target.value)} placeholder="D:\\NordieeApps" spellCheck="false" /></label><button className="library-action" type="button" onClick={addLocation}>Add</button></div>{!hasSpace && <p className="install-dialog-error" role="alert">Not enough free disk space for this game.</p>}<div className="install-dialog-actions"><button className="library-action" type="button" onClick={onCancel}>Cancel</button><button className="primary-button" type="button" disabled={!hasSpace} onClick={queueInstall}>Add to queue</button></div></section></div>;
+  return <div className="install-dialog-overlay" role="presentation" onMouseDown={onCancel}><section className="install-dialog" role="dialog" aria-modal="true" aria-labelledby="install-dialog-title" onMouseDown={(event) => event.stopPropagation()}><p className="eyebrow">INSTALL GAME</p><h2 id="install-dialog-title">Install {game.title}</h2><p className="install-dialog-copy">Choose a library location. Add an existing NordieeApps folder and Nordiee will recognize this game without downloading it again.</p><dl><div><dt>Location</dt><dd><select value={selectedRoot} onChange={(event) => setSelectedRoot(event.target.value)} aria-label="Install location">{roots.map((location) => <option key={location} value={location}>{location}</option>)}</select></dd></div><div><dt>Required</dt><dd>{requiredBytes ? gigabytes(requiredBytes) : "Size pending"}</dd></div><div><dt>Available</dt><dd className={hasSpace ? "space-ready" : "space-low"}>{gigabytes(availableBytes)}</dd></div></dl><div className="install-location-add"><label>Add or locate another NordieeApps folder<input value={customRoot} onChange={(event) => setCustomRoot(event.target.value)} placeholder="D:\\NordieeApps" spellCheck="false" /></label><button className="library-action" type="button" onClick={() => void addLocation()}>Add</button></div>{!hasSpace && <p className="install-dialog-error" role="alert">Not enough free disk space for this game.</p>}<div className="install-dialog-actions"><button className="library-action" type="button" onClick={onCancel}>Cancel</button><button className="primary-button" type="button" disabled={!hasSpace} onClick={queueInstall}>Add to queue</button></div></section></div>;
 }
 function Downloads({ download, queuedTransfers, paused, onTogglePaused }: { download: DownloadActivity | null; queuedTransfers: QueuedTransfer[]; paused: boolean; onTogglePaused: () => void }) {
   if (!download && !queuedTransfers.length) return <EmptyState title="No active downloads" text="Game installs, updates and repairs will appear here." action="Browse library" />;
