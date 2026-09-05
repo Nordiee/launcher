@@ -32,6 +32,11 @@ const FRIENDS_API_URL = "https://api.nordiee.com/api/v1/friends";
 const PROFILE_API_URL = "https://api.nordiee.com/api/v1/profile";
 const HEALTH_API_URL = "https://api.nordiee.com/health";
 
+function readStartupView(): View {
+  const saved = localStorage.getItem("nordiee.startupView");
+  return saved === "Library" || saved === "Downloads" || saved === "Friends" ? saved : "Home";
+}
+
 async function installRoot() {
   const saved = localStorage.getItem("nordiee.installRoot");
   return saved?.trim() || invoke<string>("default_install_root");
@@ -236,7 +241,7 @@ function AuthScreen({ initialEmail, onBack, onSession }: { initialEmail: string;
 }
 
 function Launcher({ session, onSwitchAccount, onLogOff, onRemoveAccount }: { session: Session; onSwitchAccount: () => void; onLogOff: () => void; onRemoveAccount: (account: SavedAccount) => Promise<void> }) {
-  const [view, setView] = useState<View>("Home");
+  const [view, setView] = useState<View>(readStartupView);
   const [librarySearchRequest, setLibrarySearchRequest] = useState(0);
   const [accountOpen, setAccountOpen] = useState(false);
   const [download, setDownload] = useState<DownloadActivity | null>(null);
@@ -425,6 +430,7 @@ function Launcher({ session, onSwitchAccount, onLogOff, onRemoveAccount }: { ses
   const serviceLabel = serviceStatus === "checking" ? "Checking services" : serviceStatus === "operational" ? "Nordiee API online" : "Nordiee API unavailable";
   const savePauseDownloadsWhilePlaying = (enabled: boolean) => { setPauseDownloadsWhilePlaying(enabled); localStorage.setItem("nordiee.pauseDownloadsWhilePlaying", String(enabled)); };
   const savePerformanceMode = (enabled: boolean) => { setPerformanceMode(enabled); localStorage.setItem("nordiee.performanceMode", String(enabled)); };
+  const saveStartupView = (startupView: View) => localStorage.setItem("nordiee.startupView", startupView);
   const saveDownloadSchedule = (schedule: DownloadSchedule) => { setDownloadSchedule(schedule); localStorage.setItem("nordiee.downloadSchedule", JSON.stringify(schedule)); };
   const saveLauncherNotificationsEnabled = (enabled: boolean) => { setLauncherNotificationsEnabled(enabled); localStorage.setItem("nordiee.launcherNotifications", String(enabled)); };
   const saveReduceMotion = (enabled: boolean) => { setReduceMotion(enabled); localStorage.setItem("nordiee.reduceMotion", String(enabled)); };
@@ -445,7 +451,7 @@ function Launcher({ session, onSwitchAccount, onLogOff, onRemoveAccount }: { ses
       {view === "Library" && <Library accessToken={session.accessToken} favoriteGameIds={favoriteGameIds} recentGames={recentGames} searchRequest={librarySearchRequest} playtimeByGame={playtimeByGame} onDownload={setDownload} onNotify={addNotification} onFavoriteToggle={(gameId) => setFavoriteGameIds(toggleLibraryFavorite(session.email, gameId))} onGameLaunched={(game) => setRecentGames(recordRecentGame(session.email, game))} runningGameIds={runningGameIds} />}
       {view === "Downloads" && <Downloads download={download} queuedTransfers={queuedTransfers} paused={downloadsPaused} onTogglePaused={() => void toggleDownloadsPaused()} />}
       {view === "Profile" && <Profile accessToken={session.accessToken} displayName={session.displayName} email={session.email} />}
-      {view === "Settings" && <><PerformanceSettings enabled={performanceMode} onChange={savePerformanceMode} /><DownloadScheduleSettings schedule={downloadSchedule} onChange={saveDownloadSchedule} /><Settings downloadSchedule={downloadSchedule} launcherNotificationsEnabled={launcherNotificationsEnabled} manualUpdateState={manualUpdateState} onDownloadScheduleChange={saveDownloadSchedule} onLauncherNotificationsEnabledChange={saveLauncherNotificationsEnabled} onManualUpdateCheck={() => void checkForLauncherUpdate(setManualUpdateState)} onReduceMotionChange={saveReduceMotion} pauseDownloadsWhilePlaying={pauseDownloadsWhilePlaying} reduceMotion={reduceMotion} onPauseDownloadsWhilePlayingChange={savePauseDownloadsWhilePlaying} /></>}
+      {view === "Settings" && <><StartupViewSettings onChange={saveStartupView} /><PerformanceSettings enabled={performanceMode} onChange={savePerformanceMode} /><DownloadScheduleSettings schedule={downloadSchedule} onChange={saveDownloadSchedule} /><Settings downloadSchedule={downloadSchedule} launcherNotificationsEnabled={launcherNotificationsEnabled} manualUpdateState={manualUpdateState} onDownloadScheduleChange={saveDownloadSchedule} onLauncherNotificationsEnabledChange={saveLauncherNotificationsEnabled} onManualUpdateCheck={() => void checkForLauncherUpdate(setManualUpdateState)} onReduceMotionChange={saveReduceMotion} pauseDownloadsWhilePlaying={pauseDownloadsWhilePlaying} reduceMotion={reduceMotion} onPauseDownloadsWhilePlayingChange={savePauseDownloadsWhilePlaying} /></>}
     </main>
   </div>;
 }
@@ -1126,6 +1132,12 @@ function QueuedTransfers({ transfers }: { transfers: QueuedTransfer[] }) {
   return <section className="queued-transfers" aria-label="Transfers waiting in queue"><div className="queued-transfers-heading"><p className="panel-label">UP NEXT</p><span>{transfers.length} waiting</span><button className="text-button" type="button" onClick={clearQueuedTransfers}>Clear queue</button></div><ol>{transfers.map((transfer, index) => <li key={transfer.id}><span className="queue-position">{index + 1}</span><span className="queue-game"><strong>{transfer.game.title}</strong><small>{actionLabel(transfer.kind)}</small></span><span className="queue-actions"><button type="button" aria-label={`Move ${transfer.game.title} up`} disabled={index === 0} onClick={() => moveTransferInQueue(transfer.id, -1)}>Up</button><button type="button" aria-label={`Move ${transfer.game.title} down`} disabled={index === transfers.length - 1} onClick={() => moveTransferInQueue(transfer.id, 1)}>Down</button><button className="queue-remove" type="button" aria-label={`Remove ${transfer.game.title} from queue`} onClick={() => removeTransferFromQueue(transfer.id)}>Remove</button></span></li>)}</ol></section>;
 }
 function EmptyState({ title, text, action }: { title: string; text: string; action: string }) { return <section className="empty-state"><div className="empty-mark" aria-hidden="true">N</div><h2>{title}</h2><p>{text}</p><button className="primary-button" type="button">{action}</button></section>; }
+function StartupViewSettings({ onChange }: { onChange: (view: View) => void }) {
+  const [startupView, setStartupView] = useState<View>(readStartupView);
+  const save = (next: View) => { setStartupView(next); onChange(next); };
+  return <article className="panel"><p className="panel-label">STARTUP</p><div className="panel-heading"><div><h3>Open on launch</h3><p>Choose the first Nordiee page shown after you sign in.</p></div><label><span className="sr-only">Startup page</span><select className="select-button" value={startupView} onChange={(event) => save(event.target.value as View)}><option value="Home">Home</option><option value="Library">Library</option><option value="Downloads">Downloads</option><option value="Friends">Friends</option></select></label></div></article>;
+}
+
 function PerformanceSettings({ enabled, onChange }: { enabled: boolean; onChange: (enabled: boolean) => void }) {
   return <article className="panel"><p className="panel-label">PERFORMANCE</p><div className="panel-heading"><div><h3>Performance Mode</h3><p>When a Nordiee game runs, reduce motion and check background services less often.</p></div><button className={enabled ? "toggle enabled" : "toggle"} type="button" aria-pressed={enabled} aria-label="Performance Mode" onClick={() => onChange(!enabled)} /></div></article>;
 }
