@@ -478,7 +478,7 @@ function Launcher({ session, onRefreshSession, onSwitchAccount, onLogOff, onRemo
       {view === "Home" && <Home download={download} onClearRecent={() => setRecentGames(clearRecentGames(session.email))} playtimeByGame={playtimeByGame} queuedTransfers={queuedTransfers} recentGames={recentGames} onOpenLibrary={() => setView("Library")} onOpenDownloads={() => setView("Downloads")} />}
       {view === "Library" && <Library accessToken={session.accessToken} favoriteGameIds={favoriteGameIds} recentGames={recentGames} searchRequest={librarySearchRequest} playtimeByGame={playtimeByGame} onDownload={setDownload} onNotify={addNotification} onFavoriteToggle={(gameId) => setFavoriteGameIds(toggleLibraryFavorite(session.email, gameId))} onGameLaunched={(game) => setRecentGames(recordRecentGame(session.email, game))} runningGameIds={runningGameIds} />}
       {view === "Downloads" && <Downloads download={download} queuedTransfers={queuedTransfers} paused={downloadsPaused} onTogglePaused={() => void toggleDownloadsPaused()} />}
-      {view === "Profile" && <Profile accessToken={session.accessToken} displayName={session.displayName} email={session.email} />}
+      {view === "Profile" && <Profile accessToken={session.accessToken} onRefreshSession={onRefreshSession} displayName={session.displayName} email={session.email} />}
       {view === "Settings" && <><StartupViewSettings onChange={saveStartupView} /><PerformanceSettings enabled={performanceMode} onChange={savePerformanceMode} /><DownloadScheduleSettings schedule={downloadSchedule} onChange={saveDownloadSchedule} /><Settings downloadSchedule={downloadSchedule} launcherNotificationsEnabled={launcherNotificationsEnabled} manualUpdateState={manualUpdateState} onDownloadScheduleChange={saveDownloadSchedule} onLauncherNotificationsEnabledChange={saveLauncherNotificationsEnabled} onManualUpdateCheck={() => void checkForLauncherUpdate(setManualUpdateState)} onReduceMotionChange={saveReduceMotion} pauseDownloadsWhilePlaying={pauseDownloadsWhilePlaying} reduceMotion={reduceMotion} onPauseDownloadsWhilePlayingChange={savePauseDownloadsWhilePlaying} /></>}
     </main>
   </div>;
@@ -689,21 +689,32 @@ function Friends({ accessToken, onRefreshSession, onBack }: { accessToken: strin
 type ProfileVisibility = "PUBLIC" | "FRIENDS" | "PRIVATE";
 type EditableProfile = { bio: string | null; avatarUrl: string | null; profileVisibility: ProfileVisibility };
 
-function Profile({ accessToken, displayName, email }: { accessToken: string; displayName: string; email: string }) {
+function Profile({ accessToken, onRefreshSession, displayName, email }: { accessToken: string; onRefreshSession: () => Promise<string | null>; displayName: string; email: string }) {
   const [profile, setProfile] = useState<EditableProfile>({ bio: null, avatarUrl: null, profileVisibility: "PUBLIC" });
   const [state, setState] = useState<"loading" | "ready" | "error">("loading");
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
+  const refreshAttemptedRef = useRef(false);
   const load = useCallback(async () => {
     setState("loading");
     try {
-      const response = await fetch(`${PROFILE_API_URL}/me/details`, { headers: { Authorization: `Bearer ${accessToken}` } });
+      let token = accessToken;
+      let response = await fetch(`${PROFILE_API_URL}/me/details`, { headers: { Authorization: `Bearer ${token}` } });
+      if ((response.status === 401 || response.status === 403) && !refreshAttemptedRef.current) {
+        refreshAttemptedRef.current = true;
+        const refreshedToken = await onRefreshSession();
+        if (refreshedToken) {
+          token = refreshedToken;
+          response = await fetch(`${PROFILE_API_URL}/me/details`, { headers: { Authorization: `Bearer ${token}` } });
+        }
+      }
       if (!response.ok) throw new Error();
       const next = await response.json() as EditableProfile;
       setProfile(next);
+      refreshAttemptedRef.current = false;
       setState("ready");
     } catch { setState("error"); }
-  }, [accessToken]);
+  }, [accessToken, onRefreshSession]);
   useEffect(() => { void load(); }, [load]);
   const save = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
