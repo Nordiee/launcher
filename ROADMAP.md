@@ -27,6 +27,7 @@ Detaljna platform vizija je u workspace dokumentu `NORDIEE — Complete Product 
 - Launcher notification centar za friend request i game update
 - Favorite Friends: lokalno po nalogu, uvek na vrhu Friends liste
 - Friend Notes: privatne lokalne beleške uz prijatelja
+- Friend Code: trajni `ND-XXXX-XXXX-XXXX` kod za deljenje i slanje zahteva
 
 ## Aktivno
 
