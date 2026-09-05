@@ -607,21 +607,28 @@ function Friends({ accessToken, onRefreshSession, onBack }: { accessToken: strin
     const loadWithToken = async (token: string, canRefresh: boolean): Promise<void> => {
       const headers = { Authorization: `Bearer ${token}` };
       const [friendsResponse, requestsResponse, profileResponse, outgoingResponse] = await Promise.all([fetch(FRIENDS_API_URL, { headers }), fetch(`${FRIENDS_API_URL}/requests`, { headers }), fetch(`${PROFILE_API_URL}/me`, { headers }), fetch(`${FRIENDS_API_URL}/requests/outgoing`, { headers })]);
-      const responses = [friendsResponse, requestsResponse, profileResponse];
+      const responses = [friendsResponse, requestsResponse, profileResponse, outgoingResponse];
       if (canRefresh && !refreshAttemptedRef.current && responses.some((response) => response.status === 401 || response.status === 403)) {
         refreshAttemptedRef.current = true;
         const refreshedToken = await onRefreshSession();
         if (refreshedToken) return loadWithToken(refreshedToken, false);
       }
-      if (!responses.every((response) => response.ok)) throw new Error("Friends request failed");
-      setFriends(parseFriendProfiles(await friendsResponse.json()));
-      setIncoming(parseFriendRequests(await requestsResponse.json()));
-      setOutgoing(outgoingResponse.ok ? parseFriendRequests(await outgoingResponse.json()) : []);
-      const profile = await profileResponse.json() as { presenceStatus: PresenceStatus; friendCode?: string };
-      setPresenceStatus(profile.presenceStatus);
-      setFriendCode(profile.friendCode ?? null);
+      const [friendsPayload, incomingPayload, outgoingPayload, profilePayload] = await Promise.all([
+        friendsResponse.ok ? friendsResponse.json() : Promise.resolve([]),
+        requestsResponse.ok ? requestsResponse.json() : Promise.resolve([]),
+        outgoingResponse.ok ? outgoingResponse.json() : Promise.resolve([]),
+        profileResponse.ok ? profileResponse.json() : Promise.resolve(null),
+      ]);
+      setFriends(parseFriendProfiles(friendsPayload));
+      setIncoming(parseFriendRequests(incomingPayload));
+      setOutgoing(parseFriendRequests(outgoingPayload));
+      const profile = profilePayload as { presenceStatus?: PresenceStatus; friendCode?: string } | null;
+      if (profile) {
+        setPresenceStatus(validPresenceStatuses.includes(profile.presenceStatus as PresenceStatus) ? profile.presenceStatus as PresenceStatus : "OFFLINE");
+        setFriendCode(typeof profile.friendCode === "string" ? profile.friendCode : null);
+      }
       refreshAttemptedRef.current = false;
-      setStatus("ready");
+      setStatus(friendsResponse.ok || requestsResponse.ok || outgoingResponse.ok ? "ready" : "error");
     };
     try { await loadWithToken(accessToken, true); } catch { setStatus("error"); }
   }, [accessToken, onRefreshSession]);
