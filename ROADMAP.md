@@ -34,6 +34,7 @@ Detaljna platform vizija je u workspace dokumentu `NORDIEE — Complete Product 
 - Friend Profile Preview: bio, avatar i presence uz postojeća privacy pravila
 - Friend Code Copy: kopiranje ličnog koda direktno iz Friends ekrana
 - Download Schedule: lokalni vremenski prozor koji automatski pauzira i nastavlja transfere
+- Performance Mode: manje background provera i reduced-motion dok igra radi
 
 ## Aktivno
 
