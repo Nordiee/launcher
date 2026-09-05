@@ -28,6 +28,7 @@ Detaljna platform vizija je u workspace dokumentu `NORDIEE — Complete Product 
 - Favorite Friends: lokalno po nalogu, uvek na vrhu Friends liste
 - Friend Notes: privatne lokalne beleške uz prijatelja
 - Friend Code: trajni `ND-XXXX-XXXX-XXXX` kod za deljenje i slanje zahteva
+- Friends lista: Favorites, Online, Away, Busy i Offline sekcije
 
 ## Aktivno
 
