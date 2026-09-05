@@ -5,6 +5,7 @@ export type LauncherNotification = {
   kind: "info" | "success" | "error";
   createdAt: number;
   read: boolean;
+  action?: "friends";
 };
 
 const STORAGE_KEY = "nordiee.notifications";
@@ -26,5 +27,5 @@ export function saveNotifications(notifications: LauncherNotification[]) {
 function isNotification(value: unknown): value is LauncherNotification {
   if (!value || typeof value !== "object") return false;
   const notification = value as Partial<LauncherNotification>;
-  return typeof notification.id === "string" && typeof notification.title === "string" && typeof notification.message === "string" && typeof notification.createdAt === "number" && typeof notification.read === "boolean" && ["info", "success", "error"].includes(notification.kind ?? "");
+  return typeof notification.id === "string" && typeof notification.title === "string" && typeof notification.message === "string" && typeof notification.createdAt === "number" && typeof notification.read === "boolean" && ["info", "success", "error"].includes(notification.kind ?? "") && (notification.action === undefined || notification.action === "friends");
 }

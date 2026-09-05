@@ -239,10 +239,10 @@ function Launcher({ session, onSwitchAccount, onLogOff, onRemoveAccount }: { ses
   const autoPausedForGameRef = useRef(false);
   const gameStartedAtRef = useRef<Record<string, number>>({});
   const knownFriendRequestIdsRef = useRef<Set<string> | null>(null);
-  const addNotification = useCallback((title: string, message: string, kind: NotificationKind = "info") => {
+  const addNotification = useCallback((title: string, message: string, kind: NotificationKind = "info", action?: LauncherNotification["action"]) => {
     if (!launcherNotificationsEnabled) return;
     setNotifications((current) => {
-    const next = [{ id: crypto.randomUUID(), title, message, kind, createdAt: Date.now(), read: false }, ...current].slice(0, 30);
+    const next = [{ id: crypto.randomUUID(), title, message, kind, action, createdAt: Date.now(), read: false }, ...current].slice(0, 30);
     saveNotifications(next);
     return next;
     });
@@ -345,7 +345,7 @@ function Launcher({ session, onSwitchAccount, onLogOff, onRemoveAccount }: { ses
         const requests = await response.json() as IncomingFriendRequest[];
         const incomingIds = new Set(requests.map((request) => request.id));
         const known = knownFriendRequestIdsRef.current;
-        if (known) for (const request of requests.filter((request) => !known.has(request.id))) addNotification("Friend request", `${request.from.username} sent you a friend request.`, "info");
+        if (known) for (const request of requests.filter((request) => !known.has(request.id))) addNotification("Friend request", `${request.from.username} sent you a friend request.`, "info", "friends");
         if (active) knownFriendRequestIdsRef.current = incomingIds;
       } catch { /* Friends stays available from its own screen when the API is offline. */ }
     };
@@ -395,7 +395,7 @@ function Launcher({ session, onSwitchAccount, onLogOff, onRemoveAccount }: { ses
       </div>
     </aside>
     <main id="main-content" className="content" tabIndex={-1}>
-      <header className="topbar"><div><p className="eyebrow">NORDIEE LAUNCHER</p><h1>{view}</h1></div><div className="topbar-actions"><div className={`service-status ${serviceStatus}`} role="status"><span /> {serviceLabel}</div><NotificationCenter notifications={notifications} open={notificationsOpen} unreadCount={unreadCount} onToggle={() => { const next = !notificationsOpen; setNotificationsOpen(next); if (next) markNotificationsRead(); }} onClear={clearNotifications} /></div></header>
+      <header className="topbar"><div><p className="eyebrow">NORDIEE LAUNCHER</p><h1>{view}</h1></div><div className="topbar-actions"><div className={`service-status ${serviceStatus}`} role="status"><span /> {serviceLabel}</div><NotificationCenter notifications={notifications} open={notificationsOpen} unreadCount={unreadCount} onToggle={() => { const next = !notificationsOpen; setNotificationsOpen(next); if (next) markNotificationsRead(); }} onClear={clearNotifications} onOpenFriends={() => { setNotificationsOpen(false); setView("Friends"); }} /></div></header>
       {view === "Home" && <Home download={download} onClearRecent={() => setRecentGames(clearRecentGames(session.email))} playtimeByGame={playtimeByGame} queuedTransfers={queuedTransfers} recentGames={recentGames} onOpenLibrary={() => setView("Library")} onOpenDownloads={() => setView("Downloads")} />}
       {view === "Library" && <Library accessToken={session.accessToken} favoriteGameIds={favoriteGameIds} recentGames={recentGames} searchRequest={librarySearchRequest} playtimeByGame={playtimeByGame} onDownload={setDownload} onNotify={addNotification} onFavoriteToggle={(gameId) => setFavoriteGameIds(toggleLibraryFavorite(session.email, gameId))} onGameLaunched={(game) => setRecentGames(recordRecentGame(session.email, game))} runningGameIds={runningGameIds} />}
       {view === "Downloads" && <Downloads download={download} queuedTransfers={queuedTransfers} paused={downloadsPaused} onTogglePaused={() => void toggleDownloadsPaused()} />}
@@ -405,13 +405,13 @@ function Launcher({ session, onSwitchAccount, onLogOff, onRemoveAccount }: { ses
   </div>;
 }
 
-function NotificationCenter({ notifications, open, unreadCount, onToggle, onClear }: { notifications: LauncherNotification[]; open: boolean; unreadCount: number; onToggle: () => void; onClear: () => void }) {
+function NotificationCenter({ notifications, open, unreadCount, onToggle, onClear, onOpenFriends }: { notifications: LauncherNotification[]; open: boolean; unreadCount: number; onToggle: () => void; onClear: () => void; onOpenFriends: () => void }) {
   useEffect(() => {
     const closeOnEscape = (event: KeyboardEvent) => { if (event.key === "Escape" && open) onToggle(); };
     window.addEventListener("keydown", closeOnEscape);
     return () => window.removeEventListener("keydown", closeOnEscape);
   }, [open, onToggle]);
-  return <div className="notification-menu"><button className="notification-trigger" type="button" aria-label={unreadCount ? `${unreadCount} unread notifications` : "Notifications"} aria-expanded={open} aria-haspopup="dialog" onClick={onToggle}><BellIcon />{unreadCount > 0 && <span className="notification-badge" aria-hidden="true">{unreadCount > 9 ? "9+" : unreadCount}</span>}</button>{open && <section className="notification-popover" role="dialog" aria-label="Notifications"><header><div><p className="panel-label">NOTIFICATIONS</p><h2>Activity</h2></div>{notifications.length > 0 && <button className="text-button" type="button" onClick={onClear}>Clear all</button>}</header>{notifications.length ? <div className="notification-list">{notifications.map((notification) => <article className={`notification-item ${notification.kind}`} key={notification.id}><div><strong>{notification.title}</strong><p>{notification.message}</p></div><time dateTime={new Date(notification.createdAt).toISOString()}>{notificationTime(notification.createdAt)}</time></article>)}</div> : <div className="notification-empty"><BellIcon size={22} /><p>No activity yet</p><small>Completed downloads and important launcher events will appear here.</small></div>}</section>}</div>;
+  return <div className="notification-menu"><button className="notification-trigger" type="button" aria-label={unreadCount ? `${unreadCount} unread notifications` : "Notifications"} aria-expanded={open} aria-haspopup="dialog" onClick={onToggle}><BellIcon />{unreadCount > 0 && <span className="notification-badge" aria-hidden="true">{unreadCount > 9 ? "9+" : unreadCount}</span>}</button>{open && <section className="notification-popover" role="dialog" aria-label="Notifications"><header><div><p className="panel-label">NOTIFICATIONS</p><h2>Activity</h2></div>{notifications.length > 0 && <button className="text-button" type="button" onClick={onClear}>Clear all</button>}</header>{notifications.length ? <div className="notification-list">{notifications.map((notification) => notification.action === "friends" ? <button className={`notification-item notification-link ${notification.kind}`} type="button" key={notification.id} onClick={onOpenFriends}><div><strong>{notification.title}</strong><p>{notification.message}</p></div><time dateTime={new Date(notification.createdAt).toISOString()}>{notificationTime(notification.createdAt)}</time></button> : <article className={`notification-item ${notification.kind}`} key={notification.id}><div><strong>{notification.title}</strong><p>{notification.message}</p></div><time dateTime={new Date(notification.createdAt).toISOString()}>{notificationTime(notification.createdAt)}</time></article>)}</div> : <div className="notification-empty"><BellIcon size={22} /><p>No activity yet</p><small>Completed downloads and important launcher events will appear here.</small></div>}</section>}</div>;
 }
 
 function Home({ download, onClearRecent, playtimeByGame, queuedTransfers, recentGames, onOpenLibrary, onOpenDownloads }: { download: DownloadActivity | null; onClearRecent: () => void; playtimeByGame: PlaytimeByGame; queuedTransfers: QueuedTransfer[]; recentGames: RecentGame[]; onOpenLibrary: () => void; onOpenDownloads: () => void }) {
