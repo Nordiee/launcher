@@ -517,10 +517,10 @@ function Friends({ accessToken, onBack }: { accessToken: string; onBack: () => v
     try {
       const headers = { Authorization: `Bearer ${accessToken}` };
       const [friendsResponse, requestsResponse, profileResponse, outgoingResponse] = await Promise.all([fetch(FRIENDS_API_URL, { headers }), fetch(`${FRIENDS_API_URL}/requests`, { headers }), fetch(`${PROFILE_API_URL}/me`, { headers }), fetch(`${FRIENDS_API_URL}/requests/outgoing`, { headers })]);
-      if (!friendsResponse.ok || !requestsResponse.ok || !profileResponse.ok || !outgoingResponse.ok) throw new Error("Friends request failed");
+      if (!friendsResponse.ok || !requestsResponse.ok || !profileResponse.ok) throw new Error("Friends request failed");
       setFriends(await friendsResponse.json() as FriendProfile[]);
       setIncoming(await requestsResponse.json() as IncomingFriendRequest[]);
-      setOutgoing(await outgoingResponse.json() as IncomingFriendRequest[]);
+      setOutgoing(outgoingResponse.ok ? await outgoingResponse.json() as IncomingFriendRequest[] : []);
       const profile = await profileResponse.json() as { presenceStatus: PresenceStatus; friendCode?: string };
       setPresenceStatus(profile.presenceStatus);
       setFriendCode(profile.friendCode ?? null);
