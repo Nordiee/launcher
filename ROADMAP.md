@@ -25,6 +25,7 @@ Detaljna platform vizija je u workspace dokumentu `NORDIEE — Complete Product 
 - Move game između biblioteka bez reinstalacije
 - Game detail strana: overview, activity, update history i settings
 - Launcher notification centar za friend request i game update
+- Favorite Friends: lokalno po nalogu, uvek na vrhu Friends liste
 
 ## Aktivno
 
