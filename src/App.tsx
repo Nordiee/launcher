@@ -238,6 +238,7 @@ function Launcher({ session, onSwitchAccount, onLogOff, onRemoveAccount }: { ses
   const [reduceMotion, setReduceMotion] = useState(() => localStorage.getItem("nordiee.reduceMotion") === "true" || window.matchMedia("(prefers-reduced-motion: reduce)").matches);
   const autoPausedForGameRef = useRef(false);
   const gameStartedAtRef = useRef<Record<string, number>>({});
+  const knownFriendRequestIdsRef = useRef<Set<string> | null>(null);
   const addNotification = useCallback((title: string, message: string, kind: NotificationKind = "info") => {
     if (!launcherNotificationsEnabled) return;
     setNotifications((current) => {
@@ -335,6 +336,24 @@ function Launcher({ session, onSwitchAccount, onLogOff, onRemoveAccount }: { ses
     const interval = window.setInterval(() => void checkHealth(), 60_000);
     return () => { active = false; window.clearInterval(interval); };
   }, []);
+  useEffect(() => {
+    let active = true;
+    const checkFriendRequests = async () => {
+      try {
+        const response = await fetch(`${FRIENDS_API_URL}/requests`, { headers: { Authorization: `Bearer ${session.accessToken}` } });
+        if (!response.ok) return;
+        const requests = await response.json() as IncomingFriendRequest[];
+        const incomingIds = new Set(requests.map((request) => request.id));
+        const known = knownFriendRequestIdsRef.current;
+        if (known) for (const request of requests.filter((request) => !known.has(request.id))) addNotification("Friend request", `${request.from.username} sent you a friend request.`, "info");
+        if (active) knownFriendRequestIdsRef.current = incomingIds;
+      } catch { /* Friends stays available from its own screen when the API is offline. */ }
+    };
+    knownFriendRequestIdsRef.current = null;
+    void checkFriendRequests();
+    const interval = window.setInterval(() => void checkFriendRequests(), 60_000);
+    return () => { active = false; window.clearInterval(interval); };
+  }, [addNotification, session.accessToken]);
   useEffect(() => {
     const unlisten = listen<{ paused?: boolean; cancelled?: boolean }>("download-transfer-state", (event) => {
       if (event.payload.cancelled) { setDownloadsPaused(false); setDownload(null); }
