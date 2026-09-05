@@ -619,6 +619,23 @@ function Library({ accessToken, favoriteGameIds, recentGames, searchRequest, pla
   const cachedLibrary = readLibraryCache(email);
   const [status, setStatus] = useState<"loading" | "ready" | "offline" | "error">("loading");
   const [games, setGames] = useState<LibraryGame[]>([]);
+  const [activeGameTitle, setActiveGameTitle] = useState<string | null>(null);
+  const updateGameActivity = useCallback(async (gameTitle: string | null) => {
+    try { await fetch(`${PROFILE_API_URL}/me/activity`, { method: "PATCH", headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" }, body: JSON.stringify({ gameTitle }) }); }
+    catch { /* Presence is best-effort and expires server-side if offline. */ }
+  }, [accessToken]);
+  useEffect(() => {
+    if (!activeGameTitle) return;
+    void updateGameActivity(activeGameTitle);
+    const heartbeat = window.setInterval(() => void updateGameActivity(activeGameTitle), 30_000);
+    return () => window.clearInterval(heartbeat);
+  }, [activeGameTitle, updateGameActivity]);
+  useEffect(() => {
+    const unlisten = listen<{ gameId: string; running: boolean }>("game-running-state", (event) => {
+      if (!event.payload.running) { setActiveGameTitle(null); void updateGameActivity(null); }
+    });
+    return () => { void unlisten.then((cleanup) => cleanup()); };
+  }, [updateGameActivity]);
   const [libraryFilter, setLibraryFilter] = useState<LibraryFilter>("all");
   const [libraryQuery, setLibraryQuery] = useState("");
   const librarySearchRef = useRef<HTMLInputElement>(null);
@@ -839,6 +856,7 @@ function Library({ accessToken, favoriteGameIds, recentGames, searchRequest, pla
         setUpdateStatus((current) => ({ ...current, [game.id]: "Offline - starting the installed version." }));
       }
       await invoke("launch_game", { gameId: game.id, installRoot: await rootForGame(game.id), launchArguments: parseLaunchOptions(launchOptions[game.id] ?? "") });
+      setActiveGameTitle(game.title);
       onGameLaunched({ id: game.id, title: game.title });
     } catch (error) {
       const message = error instanceof Error ? error.message : "We could not launch this game.";
