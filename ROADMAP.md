@@ -33,6 +33,7 @@ Detaljna platform vizija je u workspace dokumentu `NORDIEE — Complete Product 
 - In-game presence: heartbeat pri igranju, automatski expiry i Friends prikaz aktivne igre
 - Friend Profile Preview: bio, avatar i presence uz postojeća privacy pravila
 - Friend Code Copy: kopiranje ličnog koda direktno iz Friends ekrana
+- Friends resilience: bezbedan prikaz API odgovora, recovery ekran i trajne notifikacije za pending zahteve
 - Download Schedule: lokalni vremenski prozor koji automatski pauzira i nastavlja transfere
 - Performance Mode: manje background provera i reduced-motion dok igra radi
 - Startup Page: izbor Home, Library, Downloads ili Friends pri pokretanju launchera

@@ -2298,7 +2298,7 @@ dependencies = [
 
 [[package]]
 name = "nordiee-launcher"
-version = "0.1.61"
+version = "0.1.62"
 dependencies = [
  "fs2",
  "futures-util",

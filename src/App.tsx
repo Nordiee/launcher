@@ -1,4 +1,4 @@
-import { FormEvent, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { Component, FormEvent, useCallback, useEffect, useRef, useState, type ErrorInfo, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -37,6 +37,17 @@ const LAUNCHER_REPORTS_API_URL = "https://api.nordiee.com/api/v1/launcher/report
 function readStartupView(): View {
   const saved = localStorage.getItem("nordiee.startupView");
   return saved === "Library" || saved === "Downloads" || saved === "Friends" ? saved : "Home";
+}
+
+function readSeenFriendRequestIds(email: string) {
+  try {
+    const saved = JSON.parse(localStorage.getItem(`nordiee.seenFriendRequests.${email.trim().toLocaleLowerCase()}`) ?? "[]");
+    return new Set(Array.isArray(saved) ? saved.filter((id): id is string => typeof id === "string") : []);
+  } catch { return new Set<string>(); }
+}
+
+function saveSeenFriendRequestIds(email: string, ids: Set<string>) {
+  localStorage.setItem(`nordiee.seenFriendRequests.${email.trim().toLocaleLowerCase()}`, JSON.stringify([...ids].slice(-100)));
 }
 
 async function installRoot() {
@@ -424,11 +435,14 @@ function Launcher({ session, onRefreshSession, onSwitchAccount, onLogOff, onRemo
       try {
         const response = await fetch(`${FRIENDS_API_URL}/requests`, { headers: { Authorization: `Bearer ${session.accessToken}` } });
         if (!response.ok) return;
-        const requests = await response.json() as IncomingFriendRequest[];
+        const requests = parseFriendRequests(await response.json());
         const incomingIds = new Set(requests.map((request) => request.id));
-        const known = knownFriendRequestIdsRef.current;
-        if (known) for (const request of requests.filter((request) => !known.has(request.id))) addNotification("Friend request", `${request.from.username} sent you a friend request.`, "info", "friends");
-        if (active) knownFriendRequestIdsRef.current = incomingIds;
+        const known = knownFriendRequestIdsRef.current ?? readSeenFriendRequestIds(session.email);
+        for (const request of requests.filter((request) => !known.has(request.id))) addNotification("Friend request", `${request.from.username} sent you a friend request.`, "info", "friends");
+        if (active) {
+          knownFriendRequestIdsRef.current = incomingIds;
+          saveSeenFriendRequestIds(session.email, incomingIds);
+        }
       } catch { /* Friends stays available from its own screen when the API is offline. */ }
     };
     knownFriendRequestIdsRef.current = null;
@@ -471,7 +485,7 @@ function Launcher({ session, onRefreshSession, onSwitchAccount, onLogOff, onRemo
   const saveDownloadSchedule = (schedule: DownloadSchedule) => { setDownloadSchedule(schedule); localStorage.setItem("nordiee.downloadSchedule", JSON.stringify(schedule)); };
   const saveLauncherNotificationsEnabled = (enabled: boolean) => { setLauncherNotificationsEnabled(enabled); localStorage.setItem("nordiee.launcherNotifications", String(enabled)); };
   const saveReduceMotion = (enabled: boolean) => { setReduceMotion(enabled); localStorage.setItem("nordiee.reduceMotion", String(enabled)); };
-  if (view === "Friends") return <div className="launcher-shell"><a className="skip-link" href="#friends-content">Skip to content</a><aside className="sidebar" aria-label="Launcher navigation"><div className="sidebar-brand"><img src="/logo.svg" alt="Nordiee" /><span>NORDIEE</span></div><nav className="navigation">{navigation.map((item) => <button className={view === item.label ? "nav-item active" : "nav-item"} key={item.label} onClick={() => setView(item.label)} type="button"><span className="nav-icon">{item.icon}</span>{item.label}</button>)}</nav><div className="sidebar-bottom"><button className="nav-item" onClick={() => setView("Settings")} type="button"><span className="nav-icon"><SettingsIcon /></span>Settings</button></div></aside><Friends accessToken={session.accessToken} onRefreshSession={onRefreshSession} onBack={() => setView("Home")} /></div>;
+  if (view === "Friends") return <div className="launcher-shell"><a className="skip-link" href="#friends-content">Skip to content</a><aside className="sidebar" aria-label="Launcher navigation"><div className="sidebar-brand"><img src="/logo.svg" alt="Nordiee" /><span>NORDIEE</span></div><nav className="navigation">{navigation.map((item) => <button className={view === item.label ? "nav-item active" : "nav-item"} key={item.label} onClick={() => setView(item.label)} type="button"><span className="nav-icon">{item.icon}</span>{item.label}</button>)}</nav><div className="sidebar-bottom"><button className="nav-item" onClick={() => setView("Settings")} type="button"><span className="nav-icon"><SettingsIcon /></span>Settings</button></div></aside><FriendsErrorBoundary onBack={() => setView("Home")}><Friends accessToken={session.accessToken} onRefreshSession={onRefreshSession} onBack={() => setView("Home")} /></FriendsErrorBoundary></div>;
   return <div className="launcher-shell">
     <a className="skip-link" href="#main-content">Skip to content</a>
     <aside className="sidebar" aria-label="Launcher navigation">
@@ -515,6 +529,44 @@ type PresenceStatus = "ONLINE" | "AWAY" | "BUSY" | "INVISIBLE" | "OFFLINE";
 type FriendProfile = { id: string; username: string; presenceStatus: PresenceStatus; activeGameTitle?: string | null };
 type IncomingFriendRequest = { id: string; from: FriendProfile; createdAt: string };
 type FriendProfilePreview = { username: string; presenceStatus: PresenceStatus; bio: string | null; avatarUrl: string | null };
+
+const validPresenceStatuses: PresenceStatus[] = ["ONLINE", "AWAY", "BUSY", "INVISIBLE", "OFFLINE"];
+
+function parseFriendProfile(value: unknown): FriendProfile | null {
+  if (!value || typeof value !== "object") return null;
+  const profile = value as Partial<FriendProfile>;
+  if (typeof profile.id !== "string" || typeof profile.username !== "string" || !profile.username.trim()) return null;
+  return {
+    id: profile.id,
+    username: profile.username.trim(),
+    presenceStatus: validPresenceStatuses.includes(profile.presenceStatus as PresenceStatus) ? profile.presenceStatus as PresenceStatus : "OFFLINE",
+    activeGameTitle: typeof profile.activeGameTitle === "string" ? profile.activeGameTitle : null,
+  };
+}
+
+function parseFriendProfiles(value: unknown): FriendProfile[] {
+  return Array.isArray(value) ? value.map(parseFriendProfile).filter((profile): profile is FriendProfile => profile !== null) : [];
+}
+
+function parseFriendRequests(value: unknown): IncomingFriendRequest[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    const request = item as Partial<IncomingFriendRequest>;
+    const from = parseFriendProfile(request.from);
+    return typeof request.id === "string" && from ? [{ id: request.id, from, createdAt: typeof request.createdAt === "string" ? request.createdAt : new Date().toISOString() }] : [];
+  });
+}
+
+class FriendsErrorBoundary extends Component<{ children: ReactNode; onBack: () => void }, { error: boolean }> {
+  state = { error: false };
+  static getDerivedStateFromError() { return { error: true }; }
+  componentDidCatch(error: Error, info: ErrorInfo) { recordLauncherIssue(new Error(`Friends screen: ${error.message} ${info.componentStack ?? ""}`)); }
+  render() {
+    if (!this.state.error) return this.props.children;
+    return <main className="friends-page friends-recovery" id="friends-content"><section className="panel"><p className="panel-label">FRIENDS</p><h1>We could not open Friends</h1><p>Your account and friend requests are safe. Return home, then try Friends again.</p><div><button className="primary-button" type="button" onClick={() => this.setState({ error: false })}>Try again</button><button className="text-button" type="button" onClick={this.props.onBack}>Back to Home</button></div></section></main>;
+  }
+}
 
 function Friends({ accessToken, onRefreshSession, onBack }: { accessToken: string; onRefreshSession: () => Promise<string | null>; onBack: () => void }) {
   const [friends, setFriends] = useState<FriendProfile[]>([]);
@@ -562,9 +614,9 @@ function Friends({ accessToken, onRefreshSession, onBack }: { accessToken: strin
         if (refreshedToken) return loadWithToken(refreshedToken, false);
       }
       if (!responses.every((response) => response.ok)) throw new Error("Friends request failed");
-      setFriends(await friendsResponse.json() as FriendProfile[]);
-      setIncoming(await requestsResponse.json() as IncomingFriendRequest[]);
-      setOutgoing(outgoingResponse.ok ? await outgoingResponse.json() as IncomingFriendRequest[] : []);
+      setFriends(parseFriendProfiles(await friendsResponse.json()));
+      setIncoming(parseFriendRequests(await requestsResponse.json()));
+      setOutgoing(outgoingResponse.ok ? parseFriendRequests(await outgoingResponse.json()) : []);
       const profile = await profileResponse.json() as { presenceStatus: PresenceStatus; friendCode?: string };
       setPresenceStatus(profile.presenceStatus);
       setFriendCode(profile.friendCode ?? null);
