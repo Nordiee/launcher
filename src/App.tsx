@@ -157,6 +157,28 @@ export default function App() {
     setAccessView("accounts");
     if (currentSession) await endRemoteSession(currentSession);
   };
+  const refreshActiveSession = async (): Promise<string | null> => {
+    const currentSession = session;
+    if (!currentSession) return null;
+    try {
+      const response = await fetch(`${API_BASE_URL}/refresh`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ refreshToken: currentSession.refreshToken }) });
+      const body = await response.json() as AuthResponse & { error?: string };
+      if (!response.ok) {
+        if (response.status === 401 || response.status === 403) { clearActiveAccount(); setSession(null); }
+        return null;
+      }
+      const nextSession = toSession(body);
+      await saveAccountSession(nextSession, nextSession);
+      setAccounts(listSavedAccounts());
+      setSession(nextSession);
+      return nextSession.accessToken;
+    } catch { return null; }
+  };
+  useEffect(() => {
+    if (!session) return;
+    const interval = window.setInterval(() => { void refreshActiveSession(); }, 10 * 60_000);
+    return () => window.clearInterval(interval);
+  }, [session?.refreshToken]);
   const switchAccount = () => { clearActiveAccount(); setSession(null); setAccessView("accounts"); };
   const removeAccount = async (account: SavedAccount) => { const savedSession = await getAccountSession(account.email); await removeSavedAccount(account.email); const remaining = listSavedAccounts(); setAccounts(remaining); if (session?.email === account.email) setSession(null); if (savedSession) await endRemoteSession(savedSession); setAccessView(remaining.length ? "accounts" : "credentials"); };
   const removeAllAccounts = async () => {
@@ -180,7 +202,7 @@ export default function App() {
     if (!response.ok) { clearActiveAccount(); setPrefilledEmail(account.email); setAccessView("credentials"); return; }
     await startSession(toSession(body));
   };
-  return <div className="app-window"><Titlebar />{updateState !== "ready" ? <UpdateGate state={updateState} /> : !sessionReady ? <StartupGate /> : session ? <Launcher session={session} onSwitchAccount={switchAccount} onLogOff={logOff} onRemoveAccount={removeAccount} /> : accessView === "accounts" && accounts.length ? <AccountPicker accounts={accounts} onSelect={selectAccount} onAdd={() => setAccessView("credentials")} onRemove={removeAccount} onRemoveAll={removeAllAccounts} /> : <AuthScreen initialEmail={prefilledEmail} onBack={accounts.length ? () => setAccessView("accounts") : undefined} onSession={startSession} />}</div>;
+  return <div className="app-window"><Titlebar />{updateState !== "ready" ? <UpdateGate state={updateState} /> : !sessionReady ? <StartupGate /> : session ? <Launcher session={session} onRefreshSession={refreshActiveSession} onSwitchAccount={switchAccount} onLogOff={logOff} onRemoveAccount={removeAccount} /> : accessView === "accounts" && accounts.length ? <AccountPicker accounts={accounts} onSelect={selectAccount} onAdd={() => setAccessView("credentials")} onRemove={removeAccount} onRemoveAll={removeAllAccounts} /> : <AuthScreen initialEmail={prefilledEmail} onBack={accounts.length ? () => setAccessView("accounts") : undefined} onSession={startSession} />}</div>;
 }
 
 function UpdateGate({ state }: { state: UpdateState }) { return <StartupScreen label={state === "checking" ? "STARTUP CHECK" : "UPDATE READY"} title={state === "checking" ? "Preparing Nordiee" : "Installing the latest build"} text={state === "checking" ? "Checking your launcher version before we let you in." : "Your update is being verified and installed. Nordiee will reopen automatically."} activeStep={state === "checking" ? 1 : 2} />; }
@@ -240,7 +262,7 @@ function AuthScreen({ initialEmail, onBack, onSession }: { initialEmail: string;
   </main>;
 }
 
-function Launcher({ session, onSwitchAccount, onLogOff, onRemoveAccount }: { session: Session; onSwitchAccount: () => void; onLogOff: () => void; onRemoveAccount: (account: SavedAccount) => Promise<void> }) {
+function Launcher({ session, onRefreshSession, onSwitchAccount, onLogOff, onRemoveAccount }: { session: Session; onRefreshSession: () => Promise<string | null>; onSwitchAccount: () => void; onLogOff: () => void; onRemoveAccount: (account: SavedAccount) => Promise<void> }) {
   const [view, setView] = useState<View>(readStartupView);
   const [librarySearchRequest, setLibrarySearchRequest] = useState(0);
   const [accountOpen, setAccountOpen] = useState(false);
@@ -434,7 +456,7 @@ function Launcher({ session, onSwitchAccount, onLogOff, onRemoveAccount }: { ses
   const saveDownloadSchedule = (schedule: DownloadSchedule) => { setDownloadSchedule(schedule); localStorage.setItem("nordiee.downloadSchedule", JSON.stringify(schedule)); };
   const saveLauncherNotificationsEnabled = (enabled: boolean) => { setLauncherNotificationsEnabled(enabled); localStorage.setItem("nordiee.launcherNotifications", String(enabled)); };
   const saveReduceMotion = (enabled: boolean) => { setReduceMotion(enabled); localStorage.setItem("nordiee.reduceMotion", String(enabled)); };
-  if (view === "Friends") return <div className="launcher-shell"><a className="skip-link" href="#friends-content">Skip to content</a><aside className="sidebar" aria-label="Launcher navigation"><div className="sidebar-brand"><img src="/logo.svg" alt="Nordiee" /><span>NORDIEE</span></div><nav className="navigation">{navigation.map((item) => <button className={view === item.label ? "nav-item active" : "nav-item"} key={item.label} onClick={() => setView(item.label)} type="button"><span className="nav-icon">{item.icon}</span>{item.label}</button>)}</nav><div className="sidebar-bottom"><button className="nav-item" onClick={() => setView("Settings")} type="button"><span className="nav-icon"><SettingsIcon /></span>Settings</button></div></aside><Friends accessToken={session.accessToken} onBack={() => setView("Home")} /></div>;
+  if (view === "Friends") return <div className="launcher-shell"><a className="skip-link" href="#friends-content">Skip to content</a><aside className="sidebar" aria-label="Launcher navigation"><div className="sidebar-brand"><img src="/logo.svg" alt="Nordiee" /><span>NORDIEE</span></div><nav className="navigation">{navigation.map((item) => <button className={view === item.label ? "nav-item active" : "nav-item"} key={item.label} onClick={() => setView(item.label)} type="button"><span className="nav-icon">{item.icon}</span>{item.label}</button>)}</nav><div className="sidebar-bottom"><button className="nav-item" onClick={() => setView("Settings")} type="button"><span className="nav-icon"><SettingsIcon /></span>Settings</button></div></aside><Friends accessToken={session.accessToken} onRefreshSession={onRefreshSession} onBack={() => setView("Home")} /></div>;
   return <div className="launcher-shell">
     <a className="skip-link" href="#main-content">Skip to content</a>
     <aside className="sidebar" aria-label="Launcher navigation">
@@ -479,7 +501,7 @@ type FriendProfile = { id: string; username: string; presenceStatus: PresenceSta
 type IncomingFriendRequest = { id: string; from: FriendProfile; createdAt: string };
 type FriendProfilePreview = { username: string; presenceStatus: PresenceStatus; bio: string | null; avatarUrl: string | null };
 
-function Friends({ accessToken, onBack }: { accessToken: string; onBack: () => void }) {
+function Friends({ accessToken, onRefreshSession, onBack }: { accessToken: string; onRefreshSession: () => Promise<string | null>; onBack: () => void }) {
   const [friends, setFriends] = useState<FriendProfile[]>([]);
   const favoriteFriendsKey = `nordiee.favoriteFriends.${(activeAccountEmail() ?? "guest").trim().toLocaleLowerCase()}`;
   const [favoriteFriendIds, setFavoriteFriendIds] = useState<string[]>(() => {
@@ -514,10 +536,15 @@ function Friends({ accessToken, onBack }: { accessToken: string; onBack: () => v
   }, []);
   const load = useCallback(async () => {
     setStatus("loading");
-    try {
-      const headers = { Authorization: `Bearer ${accessToken}` };
+    const loadWithToken = async (token: string, canRefresh: boolean): Promise<void> => {
+      const headers = { Authorization: `Bearer ${token}` };
       const [friendsResponse, requestsResponse, profileResponse, outgoingResponse] = await Promise.all([fetch(FRIENDS_API_URL, { headers }), fetch(`${FRIENDS_API_URL}/requests`, { headers }), fetch(`${PROFILE_API_URL}/me`, { headers }), fetch(`${FRIENDS_API_URL}/requests/outgoing`, { headers })]);
-      if (!friendsResponse.ok || !requestsResponse.ok || !profileResponse.ok) throw new Error("Friends request failed");
+      const responses = [friendsResponse, requestsResponse, profileResponse];
+      if (canRefresh && responses.some((response) => response.status === 401 || response.status === 403)) {
+        const refreshedToken = await onRefreshSession();
+        if (refreshedToken) return loadWithToken(refreshedToken, false);
+      }
+      if (!responses.every((response) => response.ok)) throw new Error("Friends request failed");
       setFriends(await friendsResponse.json() as FriendProfile[]);
       setIncoming(await requestsResponse.json() as IncomingFriendRequest[]);
       setOutgoing(outgoingResponse.ok ? await outgoingResponse.json() as IncomingFriendRequest[] : []);
@@ -525,10 +552,9 @@ function Friends({ accessToken, onBack }: { accessToken: string; onBack: () => v
       setPresenceStatus(profile.presenceStatus);
       setFriendCode(profile.friendCode ?? null);
       setStatus("ready");
-    } catch {
-      setStatus("error");
-    }
-  }, [accessToken]);
+    };
+    try { await loadWithToken(accessToken, true); } catch { setStatus("error"); }
+  }, [accessToken, onRefreshSession]);
   useEffect(() => { void load(); }, [load]);
   const sendRequest = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
