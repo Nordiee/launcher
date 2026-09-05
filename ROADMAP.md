@@ -21,18 +21,18 @@ Detaljna platform vizija je u workspace dokumentu `NORDIEE — Complete Product 
 - Friends presence: Online, Away, Busy, Invisible i Offline
 - Profile: bio, HTTPS avatar URL i Public/Friends/Private privacy kontrole
 - Multiple game libraries i izbor diska pri instalaciji
+- Locate existing installation bez novog download-a
+- Move game između biblioteka bez reinstalacije
+- Game detail strana: overview, activity, update history i settings
+- Launcher notification centar za friend request i game update
 
 ## Aktivno
 
-- Presence, profile i multiple-library UI/API commitovi čekaju GitHub push, čim mrežna veza agenta bude dostupna.
+- GitHub proverava poslednja launcher poboljšanja pre narednog signed release-a.
 
 ## Sledeći alpha prioriteti
 
-1. Locate existing installation bez novog download-a
-2. Move game između biblioteka bez reinstalacije
-3. Game detail strana: overview, activity, update history i settings
-4. Friend request i game update obaveštenja u launcher notification centru
-5. Poliranje prema finalnom Figma dizajnu
+1. Poliranje prema finalnom Figma dizajnu
 
 ## Pravila isporuke
 
