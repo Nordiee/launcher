@@ -25,6 +25,7 @@ type ServiceStatus = "checking" | "operational" | "unavailable";
 type LibraryFilter = "all" | "installed" | "not-installed" | "favorites" | "recent";
 type GameUpdateMode = "always" | "on-launch" | "never";
 type LibrarySort = "title" | "installed" | "favorites" | "recent" | "playtime";
+type DownloadSchedule = { enabled: boolean; start: string; end: string };
 const API_BASE_URL = "https://api.nordiee.com/api/v1/auth";
 const LIBRARY_API_URL = "https://api.nordiee.com/api/v1/library";
 const FRIENDS_API_URL = "https://api.nordiee.com/api/v1/friends";
@@ -63,6 +64,22 @@ function readGameInstallRoots(email: string): Record<string, string> {
 function configuredDownloadLimitMbps(): number | null {
   const value = Number(localStorage.getItem("nordiee.downloadLimitMbps"));
   return [10, 25, 50, 100].includes(value) ? value : null;
+}
+
+function readDownloadSchedule(): DownloadSchedule {
+  try {
+    const saved = JSON.parse(localStorage.getItem("nordiee.downloadSchedule") ?? "{}") as Partial<DownloadSchedule>;
+    return { enabled: saved.enabled === true, start: /^\d{2}:\d{2}$/.test(saved.start ?? "") ? saved.start! : "00:00", end: /^\d{2}:\d{2}$/.test(saved.end ?? "") ? saved.end! : "08:00" };
+  } catch { return { enabled: false, start: "00:00", end: "08:00" }; }
+}
+
+function isWithinDownloadSchedule(schedule: DownloadSchedule, now = new Date()) {
+  if (!schedule.enabled || schedule.start === schedule.end) return true;
+  const minutes = now.getHours() * 60 + now.getMinutes();
+  const toMinutes = (value: string) => Number(value.slice(0, 2)) * 60 + Number(value.slice(3, 5));
+  const start = toMinutes(schedule.start);
+  const end = toMinutes(schedule.end);
+  return start < end ? minutes >= start && minutes < end : minutes >= start || minutes < end;
 }
 
 function parseLaunchOptions(value: string): string[] {
@@ -233,10 +250,13 @@ function Launcher({ session, onSwitchAccount, onLogOff, onRemoveAccount }: { ses
   const [favoriteGameIds, setFavoriteGameIds] = useState<string[]>(() => readLibraryFavorites(session.email));
   const [playtimeByGame, setPlaytimeByGame] = useState<PlaytimeByGame>(() => readPlaytime(session.email));
   const [pauseDownloadsWhilePlaying, setPauseDownloadsWhilePlaying] = useState(() => localStorage.getItem("nordiee.pauseDownloadsWhilePlaying") === "true");
+  const [downloadSchedule, setDownloadSchedule] = useState<DownloadSchedule>(readDownloadSchedule);
   const [manualUpdateState, setManualUpdateState] = useState<ManualUpdateState>("idle");
   const [launcherNotificationsEnabled, setLauncherNotificationsEnabled] = useState(() => localStorage.getItem("nordiee.launcherNotifications") !== "false");
   const [reduceMotion, setReduceMotion] = useState(() => localStorage.getItem("nordiee.reduceMotion") === "true" || window.matchMedia("(prefers-reduced-motion: reduce)").matches);
   const autoPausedForGameRef = useRef(false);
+  const autoPausedForScheduleRef = useRef(false);
+  const manuallyPausedDownloadsRef = useRef(false);
   const gameStartedAtRef = useRef<Record<string, number>>({});
   const knownFriendRequestIdsRef = useRef<Set<string> | null>(null);
   const addNotification = useCallback((title: string, message: string, kind: NotificationKind = "info", action?: LauncherNotification["action"]) => {
@@ -304,10 +324,29 @@ function Launcher({ session, onSwitchAccount, onLogOff, onRemoveAccount }: { ses
       void invoke("pause_downloads").catch(() => { autoPausedForGameRef.current = false; setDownloadsPaused(false); });
     } else if (!shouldPause && autoPausedForGameRef.current) {
       autoPausedForGameRef.current = false;
+      if (autoPausedForScheduleRef.current || manuallyPausedDownloadsRef.current) return;
       setDownloadsPaused(false);
       void invoke("resume_downloads").catch(() => setDownloadsPaused(true));
     }
   }, [download, downloadsPaused, pauseDownloadsWhilePlaying, runningGameIds.length]);
+  useEffect(() => {
+    const applySchedule = () => {
+      const shouldPause = Boolean(download && !isWithinDownloadSchedule(downloadSchedule));
+      if (shouldPause && !autoPausedForScheduleRef.current) {
+        autoPausedForScheduleRef.current = true;
+        setDownloadsPaused(true);
+        void invoke("pause_downloads").catch(() => { autoPausedForScheduleRef.current = false; setDownloadsPaused(false); });
+      } else if (!shouldPause && autoPausedForScheduleRef.current) {
+        autoPausedForScheduleRef.current = false;
+        if (autoPausedForGameRef.current || manuallyPausedDownloadsRef.current) return;
+        setDownloadsPaused(false);
+        void invoke("resume_downloads").catch(() => setDownloadsPaused(true));
+      }
+    };
+    applySchedule();
+    const interval = window.setInterval(applySchedule, 30_000);
+    return () => window.clearInterval(interval);
+  }, [download, downloadSchedule]);
   useEffect(() => listenForTransferQueue(setQueuedTransfers), []);
   useEffect(() => {
     const restoredQueue = activateTransferQueue(session.email);
@@ -373,14 +412,18 @@ function Launcher({ session, onSwitchAccount, onLogOff, onRemoveAccount }: { ses
   }, [addNotification]);
   const toggleDownloadsPaused = async () => {
     const next = !downloadsPaused;
-    setDownloadsPaused(next);
-    try { await invoke(next ? "pause_downloads" : "resume_downloads"); }
-    catch { setDownloadsPaused(!next); }
+    manuallyPausedDownloadsRef.current = next;
+    setDownloadsPaused(next || autoPausedForGameRef.current || autoPausedForScheduleRef.current);
+    try {
+      if (next) await invoke("pause_downloads");
+      else if (!autoPausedForGameRef.current && !autoPausedForScheduleRef.current) await invoke("resume_downloads");
+    } catch { manuallyPausedDownloadsRef.current = !next; setDownloadsPaused(!next); }
   };
   const remove = async () => { if (!window.confirm(`Remove ${session.displayName} from this computer?`)) return; await onRemoveAccount(session); };
   const unreadCount = notifications.filter((notification) => !notification.read).length;
   const serviceLabel = serviceStatus === "checking" ? "Checking services" : serviceStatus === "operational" ? "Nordiee API online" : "Nordiee API unavailable";
   const savePauseDownloadsWhilePlaying = (enabled: boolean) => { setPauseDownloadsWhilePlaying(enabled); localStorage.setItem("nordiee.pauseDownloadsWhilePlaying", String(enabled)); };
+  const saveDownloadSchedule = (schedule: DownloadSchedule) => { setDownloadSchedule(schedule); localStorage.setItem("nordiee.downloadSchedule", JSON.stringify(schedule)); };
   const saveLauncherNotificationsEnabled = (enabled: boolean) => { setLauncherNotificationsEnabled(enabled); localStorage.setItem("nordiee.launcherNotifications", String(enabled)); };
   const saveReduceMotion = (enabled: boolean) => { setReduceMotion(enabled); localStorage.setItem("nordiee.reduceMotion", String(enabled)); };
   if (view === "Friends") return <div className="launcher-shell"><a className="skip-link" href="#friends-content">Skip to content</a><aside className="sidebar" aria-label="Launcher navigation"><div className="sidebar-brand"><img src="/logo.svg" alt="Nordiee" /><span>NORDIEE</span></div><nav className="navigation">{navigation.map((item) => <button className={view === item.label ? "nav-item active" : "nav-item"} key={item.label} onClick={() => setView(item.label)} type="button"><span className="nav-icon">{item.icon}</span>{item.label}</button>)}</nav><div className="sidebar-bottom"><button className="nav-item" onClick={() => setView("Settings")} type="button"><span className="nav-icon"><SettingsIcon /></span>Settings</button></div></aside><Friends accessToken={session.accessToken} onBack={() => setView("Home")} /></div>;
@@ -400,7 +443,7 @@ function Launcher({ session, onSwitchAccount, onLogOff, onRemoveAccount }: { ses
       {view === "Library" && <Library accessToken={session.accessToken} favoriteGameIds={favoriteGameIds} recentGames={recentGames} searchRequest={librarySearchRequest} playtimeByGame={playtimeByGame} onDownload={setDownload} onNotify={addNotification} onFavoriteToggle={(gameId) => setFavoriteGameIds(toggleLibraryFavorite(session.email, gameId))} onGameLaunched={(game) => setRecentGames(recordRecentGame(session.email, game))} runningGameIds={runningGameIds} />}
       {view === "Downloads" && <Downloads download={download} queuedTransfers={queuedTransfers} paused={downloadsPaused} onTogglePaused={() => void toggleDownloadsPaused()} />}
       {view === "Profile" && <Profile accessToken={session.accessToken} displayName={session.displayName} email={session.email} />}
-      {view === "Settings" && <Settings launcherNotificationsEnabled={launcherNotificationsEnabled} manualUpdateState={manualUpdateState} onLauncherNotificationsEnabledChange={saveLauncherNotificationsEnabled} onManualUpdateCheck={() => void checkForLauncherUpdate(setManualUpdateState)} onReduceMotionChange={saveReduceMotion} pauseDownloadsWhilePlaying={pauseDownloadsWhilePlaying} reduceMotion={reduceMotion} onPauseDownloadsWhilePlayingChange={savePauseDownloadsWhilePlaying} />}
+      {view === "Settings" && <><DownloadScheduleSettings schedule={downloadSchedule} onChange={saveDownloadSchedule} /><Settings downloadSchedule={downloadSchedule} launcherNotificationsEnabled={launcherNotificationsEnabled} manualUpdateState={manualUpdateState} onDownloadScheduleChange={saveDownloadSchedule} onLauncherNotificationsEnabledChange={saveLauncherNotificationsEnabled} onManualUpdateCheck={() => void checkForLauncherUpdate(setManualUpdateState)} onReduceMotionChange={saveReduceMotion} pauseDownloadsWhilePlaying={pauseDownloadsWhilePlaying} reduceMotion={reduceMotion} onPauseDownloadsWhilePlayingChange={savePauseDownloadsWhilePlaying} /></>}
     </main>
   </div>;
 }
@@ -1081,7 +1124,11 @@ function QueuedTransfers({ transfers }: { transfers: QueuedTransfer[] }) {
   return <section className="queued-transfers" aria-label="Transfers waiting in queue"><div className="queued-transfers-heading"><p className="panel-label">UP NEXT</p><span>{transfers.length} waiting</span><button className="text-button" type="button" onClick={clearQueuedTransfers}>Clear queue</button></div><ol>{transfers.map((transfer, index) => <li key={transfer.id}><span className="queue-position">{index + 1}</span><span className="queue-game"><strong>{transfer.game.title}</strong><small>{actionLabel(transfer.kind)}</small></span><span className="queue-actions"><button type="button" aria-label={`Move ${transfer.game.title} up`} disabled={index === 0} onClick={() => moveTransferInQueue(transfer.id, -1)}>Up</button><button type="button" aria-label={`Move ${transfer.game.title} down`} disabled={index === transfers.length - 1} onClick={() => moveTransferInQueue(transfer.id, 1)}>Down</button><button className="queue-remove" type="button" aria-label={`Remove ${transfer.game.title} from queue`} onClick={() => removeTransferFromQueue(transfer.id)}>Remove</button></span></li>)}</ol></section>;
 }
 function EmptyState({ title, text, action }: { title: string; text: string; action: string }) { return <section className="empty-state"><div className="empty-mark" aria-hidden="true">N</div><h2>{title}</h2><p>{text}</p><button className="primary-button" type="button">{action}</button></section>; }
-function Settings({ launcherNotificationsEnabled, manualUpdateState, onLauncherNotificationsEnabledChange, onManualUpdateCheck, onReduceMotionChange, pauseDownloadsWhilePlaying, reduceMotion, onPauseDownloadsWhilePlayingChange }: { launcherNotificationsEnabled: boolean; manualUpdateState: ManualUpdateState; onLauncherNotificationsEnabledChange: (enabled: boolean) => void; onManualUpdateCheck: () => void; onReduceMotionChange: (enabled: boolean) => void; pauseDownloadsWhilePlaying: boolean; reduceMotion: boolean; onPauseDownloadsWhilePlayingChange: (enabled: boolean) => void }) {
+function DownloadScheduleSettings({ schedule, onChange }: { schedule: DownloadSchedule; onChange: (schedule: DownloadSchedule) => void }) {
+  return <article className="panel download-schedule"><p className="panel-label">DOWNLOADS</p><div className="panel-heading"><div><h3>Download schedule</h3><p>Pause active transfers outside this local time window.</p></div><button className={schedule.enabled ? "toggle enabled" : "toggle"} type="button" aria-pressed={schedule.enabled} aria-label="Download schedule" onClick={() => onChange({ ...schedule, enabled: !schedule.enabled })} /></div><div className="schedule-controls"><label>Start<input type="time" value={schedule.start} disabled={!schedule.enabled} onChange={(event) => onChange({ ...schedule, start: event.target.value })} /></label><label>End<input type="time" value={schedule.end} disabled={!schedule.enabled} onChange={(event) => onChange({ ...schedule, end: event.target.value })} /></label></div><small className="schedule-status">{schedule.enabled ? `${schedule.start} to ${schedule.end}${schedule.start === schedule.end ? " means all day" : ""}` : "Disabled"}</small></article>;
+}
+
+function Settings({ downloadSchedule, launcherNotificationsEnabled, manualUpdateState, onDownloadScheduleChange, onLauncherNotificationsEnabledChange, onManualUpdateCheck, onReduceMotionChange, pauseDownloadsWhilePlaying, reduceMotion, onPauseDownloadsWhilePlayingChange }: { downloadSchedule: DownloadSchedule; launcherNotificationsEnabled: boolean; manualUpdateState: ManualUpdateState; onDownloadScheduleChange: (schedule: DownloadSchedule) => void; onLauncherNotificationsEnabledChange: (enabled: boolean) => void; onManualUpdateCheck: () => void; onReduceMotionChange: (enabled: boolean) => void; pauseDownloadsWhilePlaying: boolean; reduceMotion: boolean; onPauseDownloadsWhilePlayingChange: (enabled: boolean) => void }) {
   const [installRootValue, setInstallRootValue] = useState(() => localStorage.getItem("nordiee.installRoot") ?? "");
   const [launchAtStartup, setLaunchAtStartup] = useState(false);
   const [startupSaving, setStartupSaving] = useState(false);
