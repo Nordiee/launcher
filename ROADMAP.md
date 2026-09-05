@@ -30,6 +30,7 @@ Detaljna platform vizija je u workspace dokumentu `NORDIEE — Complete Product 
 - Friend Code: trajni `ND-XXXX-XXXX-XXXX` kod za deljenje i slanje zahteva
 - Friends lista: Favorites, Online, Away, Busy i Offline sekcije
 - Outgoing Requests: pregled poslatih zahteva i otkazivanje
+- In-game presence: heartbeat pri igranju, automatski expiry i Friends prikaz aktivne igre
 
 ## Aktivno
 
