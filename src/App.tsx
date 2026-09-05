@@ -424,7 +424,7 @@ function Home({ download, onClearRecent, playtimeByGame, queuedTransfers, recent
 }
 
 type PresenceStatus = "ONLINE" | "AWAY" | "BUSY" | "INVISIBLE" | "OFFLINE";
-type FriendProfile = { id: string; username: string; presenceStatus: PresenceStatus };
+type FriendProfile = { id: string; username: string; presenceStatus: PresenceStatus; activeGameTitle?: string | null };
 type IncomingFriendRequest = { id: string; from: FriendProfile; createdAt: string };
 
 function Friends({ accessToken, onBack }: { accessToken: string; onBack: () => void }) {
@@ -560,15 +560,16 @@ function Friends({ accessToken, onBack }: { accessToken: string; onBack: () => v
   };
   const orderedFriends = [...friends].sort((left, right) => Number(favoriteFriendIds.includes(right.id)) - Number(favoriteFriendIds.includes(left.id)) || left.username.localeCompare(right.username));
   const friendGroups = [
+    { label: "In game", friends: orderedFriends.filter((friend) => Boolean(friend.activeGameTitle)) },
     { label: "Favorites", friends: orderedFriends.filter((friend) => favoriteFriendIds.includes(friend.id)) },
-    { label: "Online", friends: orderedFriends.filter((friend) => !favoriteFriendIds.includes(friend.id) && friend.presenceStatus === "ONLINE") },
+    { label: "Online", friends: orderedFriends.filter((friend) => !favoriteFriendIds.includes(friend.id) && !friend.activeGameTitle && friend.presenceStatus === "ONLINE") },
     { label: "Away", friends: orderedFriends.filter((friend) => !favoriteFriendIds.includes(friend.id) && friend.presenceStatus === "AWAY") },
     { label: "Busy", friends: orderedFriends.filter((friend) => !favoriteFriendIds.includes(friend.id) && friend.presenceStatus === "BUSY") },
     { label: "Offline", friends: orderedFriends.filter((friend) => !favoriteFriendIds.includes(friend.id) && ["OFFLINE", "INVISIBLE"].includes(friend.presenceStatus)) },
   ].filter((group) => group.friends.length);
   const friendEntry = (friend: FriendProfile) => {
     const isFavorite = favoriteFriendIds.includes(friend.id); const note = friendNotes[friend.id]; const isEditingNote = editingFriendNoteId === friend.id;
-    return <li className="friend-list-entry" key={friend.id}><span className={`friend-avatar presence-${friend.presenceStatus.toLocaleLowerCase()}`}>{friend.username[0]?.toUpperCase()}</span><strong>{friend.username}</strong><small>{friend.presenceStatus.toLocaleLowerCase()}</small><div><button className={`text-button favorite-friend${isFavorite ? " active" : ""}`} type="button" aria-pressed={isFavorite} onClick={() => toggleFavorite(friend.id)}>{isFavorite ? "Favorited" : "Favorite"}</button><button className="text-button" type="button" onClick={() => beginFriendNote(friend.id)}>{note ? "Edit note" : "Add note"}</button><button className="text-button" type="button" onClick={() => void removeFriend(friend)}>Remove</button></div>{isEditingNote ? <form className="friend-note-editor" onSubmit={(event) => { event.preventDefault(); saveFriendNote(friend.id); }}><label className="sr-only" htmlFor={`friend-note-${friend.id}`}>Private note for {friend.username}</label><input id={`friend-note-${friend.id}`} value={friendNoteDraft} onChange={(event) => setFriendNoteDraft(event.target.value)} placeholder="Private note" maxLength={120} autoFocus /><button className="select-button" type="submit">Save</button><button className="text-button" type="button" onClick={() => { setEditingFriendNoteId(null); setFriendNoteDraft(""); }}>Cancel</button></form> : note ? <p className="friend-note">Note: {note}</p> : null}</li>;
+    return <li className="friend-list-entry" key={friend.id}><span className={`friend-avatar presence-${friend.presenceStatus.toLocaleLowerCase()}`}>{friend.username[0]?.toUpperCase()}</span><strong>{friend.username}</strong><small>{friend.activeGameTitle ? `Playing ${friend.activeGameTitle}` : friend.presenceStatus.toLocaleLowerCase()}</small><div><button className={`text-button favorite-friend${isFavorite ? " active" : ""}`} type="button" aria-pressed={isFavorite} onClick={() => toggleFavorite(friend.id)}>{isFavorite ? "Favorited" : "Favorite"}</button><button className="text-button" type="button" onClick={() => beginFriendNote(friend.id)}>{note ? "Edit note" : "Add note"}</button><button className="text-button" type="button" onClick={() => void removeFriend(friend)}>Remove</button></div>{isEditingNote ? <form className="friend-note-editor" onSubmit={(event) => { event.preventDefault(); saveFriendNote(friend.id); }}><label className="sr-only" htmlFor={`friend-note-${friend.id}`}>Private note for {friend.username}</label><input id={`friend-note-${friend.id}`} value={friendNoteDraft} onChange={(event) => setFriendNoteDraft(event.target.value)} placeholder="Private note" maxLength={120} autoFocus /><button className="select-button" type="submit">Save</button><button className="text-button" type="button" onClick={() => { setEditingFriendNoteId(null); setFriendNoteDraft(""); }}>Cancel</button></form> : note ? <p className="friend-note">Note: {note}</p> : null}</li>;
   };
   return <main className="friends-page">
     <header className="friends-header"><div><p className="eyebrow">SOCIAL</p><h1>Friends</h1><p>Keep your Nordiee people in one place.</p></div><button className="text-button" type="button" onClick={onBack}>Back to Home</button></header>
