@@ -36,10 +36,11 @@ Detaljna platform vizija je u workspace dokumentu `NORDIEE — Complete Product 
 - Download Schedule: lokalni vremenski prozor koji automatski pauzira i nastavlja transfere
 - Performance Mode: manje background provera i reduced-motion dok igra radi
 - Startup Page: izbor Home, Library, Downloads ili Friends pri pokretanju launchera
+- Opt-in support reports: lokalno redigovani crash detalji i autentifikovan dijagnostički upload
 
 ## Aktivno
 
-- GitHub proverava poslednja launcher poboljšanja pre narednog signed release-a.
+- Praćenje produkcionih support reportova i poliranje prema finalnom Figma dizajnu.
 
 ## Sledeći alpha prioriteti
 
