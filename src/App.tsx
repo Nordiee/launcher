@@ -446,6 +446,7 @@ function Friends({ accessToken, onBack }: { accessToken: string; onBack: () => v
   const [editingFriendNoteId, setEditingFriendNoteId] = useState<string | null>(null);
   const [friendNoteDraft, setFriendNoteDraft] = useState("");
   const [incoming, setIncoming] = useState<IncomingFriendRequest[]>([]);
+  const [outgoing, setOutgoing] = useState<IncomingFriendRequest[]>([]);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const [username, setUsername] = useState("");
   const [message, setMessage] = useState("");
@@ -461,10 +462,11 @@ function Friends({ accessToken, onBack }: { accessToken: string; onBack: () => v
     setStatus("loading");
     try {
       const headers = { Authorization: `Bearer ${accessToken}` };
-      const [friendsResponse, requestsResponse, profileResponse] = await Promise.all([fetch(FRIENDS_API_URL, { headers }), fetch(`${FRIENDS_API_URL}/requests`, { headers }), fetch(`${PROFILE_API_URL}/me`, { headers })]);
-      if (!friendsResponse.ok || !requestsResponse.ok || !profileResponse.ok) throw new Error("Friends request failed");
+      const [friendsResponse, requestsResponse, profileResponse, outgoingResponse] = await Promise.all([fetch(FRIENDS_API_URL, { headers }), fetch(`${FRIENDS_API_URL}/requests`, { headers }), fetch(`${PROFILE_API_URL}/me`, { headers }), fetch(`${FRIENDS_API_URL}/requests/outgoing`, { headers })]);
+      if (!friendsResponse.ok || !requestsResponse.ok || !profileResponse.ok || !outgoingResponse.ok) throw new Error("Friends request failed");
       setFriends(await friendsResponse.json() as FriendProfile[]);
       setIncoming(await requestsResponse.json() as IncomingFriendRequest[]);
+      setOutgoing(await outgoingResponse.json() as IncomingFriendRequest[]);
       const profile = await profileResponse.json() as { presenceStatus: PresenceStatus; friendCode?: string };
       setPresenceStatus(profile.presenceStatus);
       setFriendCode(profile.friendCode ?? null);
@@ -484,6 +486,7 @@ function Friends({ accessToken, onBack }: { accessToken: string; onBack: () => v
       if (!response.ok) { const body = await response.json().catch(() => null) as { error?: string } | null; throw new Error(body?.error ?? "Could not send that friend request."); }
       setUsername("");
       setMessage("Friend request sent.");
+      await load();
     } catch (error) { setMessage(error instanceof Error ? error.message : "Could not send that friend request."); }
     finally { setSubmitting(false); }
   };
@@ -501,6 +504,14 @@ function Friends({ accessToken, onBack }: { accessToken: string; onBack: () => v
       if (!response.ok) throw new Error();
       setIncoming((current) => current.filter((request) => request.id !== requestId));
     } catch { setMessage("Could not decline that request. Try again."); }
+  };
+  const cancelOutgoing = async (requestId: string) => {
+    try {
+      const response = await fetch(`${FRIENDS_API_URL}/requests/${requestId}`, { method: "DELETE", headers: { Authorization: `Bearer ${accessToken}` } });
+      if (!response.ok) throw new Error();
+      setOutgoing((current) => current.filter((request) => request.id !== requestId));
+      setMessage("Friend request cancelled.");
+    } catch { setMessage("Could not cancel that friend request. Try again."); }
   };
   const removeFriend = async (friend: FriendProfile) => {
     if (!window.confirm(`Remove ${friend.username} from your friends?`)) return;
@@ -563,7 +574,7 @@ function Friends({ accessToken, onBack }: { accessToken: string; onBack: () => v
     <header className="friends-header"><div><p className="eyebrow">SOCIAL</p><h1>Friends</h1><p>Keep your Nordiee people in one place.</p></div><button className="text-button" type="button" onClick={onBack}>Back to Home</button></header>
     <section className="friends-grid">
       <article className="panel add-friend-card"><p className="panel-label">YOUR STATUS</p><h2>How do you appear?</h2><label className="presence-picker">Presence<select value={presenceStatus} disabled={savingPresence} onChange={(event) => void updatePresence(event.target.value as PresenceStatus)}><option value="ONLINE">Online</option><option value="AWAY">Away</option><option value="BUSY">Busy</option><option value="INVISIBLE">Invisible</option><option value="OFFLINE">Offline</option></select></label><p className="presence-hint">Invisible appears offline to other players.</p><div className="friend-code-card"><span>Your Friend Code</span><code>{friendCode ?? "Loading code..."}</code><small>Share this instead of your username.</small></div><div className="add-friend-divider" /><p className="panel-label">ADD FRIEND</p><h2>Find a player</h2><form onSubmit={(event) => void sendRequest(event)}><label>Nordiee username or Friend Code<input value={username} onChange={(event) => setUsername(event.target.value)} placeholder="Username or ND-XXXX-XXXX-XXXX" minLength={3} maxLength={24} required autoComplete="off" /></label><button className="primary-button" type="submit" disabled={submitting}>{submitting ? "Sending" : "Send request"}</button></form>{message && <p className={message.endsWith("sent.") || message.endsWith("accepted.") || message.includes("was removed") || message.startsWith("Your status") ? "friends-message success" : "friends-message"} role="status">{message}</p>}</article>
-      <article className="panel"><div className="panel-heading"><div><p className="panel-label">REQUESTS</p><h2>Incoming</h2></div><span className="count">{incoming.length}</span></div>{status === "loading" ? <p>Loading friend requests...</p> : incoming.length ? <ul className="friends-list">{incoming.map((request) => <li key={request.id}><span className="friend-avatar">{request.from.username[0]?.toUpperCase()}</span><strong>{request.from.username}</strong><small>{notificationTime(new Date(request.createdAt).getTime())}</small><div><button className="select-button" type="button" onClick={() => void accept(request.id)}>Accept</button><button className="text-button" type="button" onClick={() => void decline(request.id)}>Decline</button></div></li>)}</ul> : <p>No pending requests.</p>}</article>
+      <article className="panel"><div className="panel-heading"><div><p className="panel-label">REQUESTS</p><h2>Incoming</h2></div><span className="count">{incoming.length}</span></div>{status === "loading" ? <p>Loading friend requests...</p> : incoming.length ? <ul className="friends-list">{incoming.map((request) => <li key={request.id}><span className="friend-avatar">{request.from.username[0]?.toUpperCase()}</span><strong>{request.from.username}</strong><small>{notificationTime(new Date(request.createdAt).getTime())}</small><div><button className="select-button" type="button" onClick={() => void accept(request.id)}>Accept</button><button className="text-button" type="button" onClick={() => void decline(request.id)}>Decline</button></div></li>)}</ul> : <p>No pending requests.</p>}<div className="add-friend-divider request-divider" /><div className="panel-heading request-heading"><div><p className="panel-label">SENT</p><h2>Outgoing</h2></div><span className="count">{outgoing.length}</span></div>{status !== "loading" && (outgoing.length ? <ul className="friends-list">{outgoing.map((request) => <li key={request.id}><span className="friend-avatar">{request.from.username[0]?.toUpperCase()}</span><strong>{request.from.username}</strong><small>{notificationTime(new Date(request.createdAt).getTime())}</small><button className="text-button" type="button" onClick={() => void cancelOutgoing(request.id)}>Cancel</button></li>)}</ul> : <p>No sent requests.</p>)}</article>
       <article className="panel friends-list-card"><div className="panel-heading"><div><p className="panel-label">YOUR FRIENDS</p><h2>{friends.length ? `${friends.length} connected` : "No friends yet"}</h2></div></div>{status === "error" ? <><p>We could not load Friends. Check your connection, then try again.</p><button className="text-button" type="button" onClick={() => void load()}>Try again</button></> : status === "loading" ? <p>Loading friends...</p> : friends.length ? <div className="friend-status-groups">{friendGroups.map((group) => <section className="friend-status-group" key={group.label} aria-label={`${group.label} friends`}><div className="friend-status-heading"><h3>{group.label}</h3><span>{group.friends.length}</span></div><ul className="friends-list">{group.friends.map(friendEntry)}</ul></section>)}</div> : <p>Send a request by Nordiee username to start your list.</p>}</article>
     </section>
   </main>;
