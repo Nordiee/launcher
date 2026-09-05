@@ -121,6 +121,7 @@ export default function App() {
   const [sessionReady, setSessionReady] = useState(false);
   const [accessView, setAccessView] = useState<AccessView>(accounts.length ? "accounts" : "credentials");
   const [prefilledEmail, setPrefilledEmail] = useState("");
+  const refreshingSessionRef = useRef<Promise<string | null> | null>(null);
   useEffect(() => { void applyAvailableUpdate(setUpdateState); }, []);
   useEffect(() => {
     const restoreSession = async () => {
@@ -157,7 +158,9 @@ export default function App() {
     setAccessView("accounts");
     if (currentSession) await endRemoteSession(currentSession);
   };
-  const refreshActiveSession = async (): Promise<string | null> => {
+  const refreshActiveSession = useCallback(async (): Promise<string | null> => {
+    if (refreshingSessionRef.current) return refreshingSessionRef.current;
+    const refreshPromise = (async (): Promise<string | null> => {
     const currentSession = session;
     if (!currentSession) return null;
     try {
@@ -173,7 +176,10 @@ export default function App() {
       setSession(nextSession);
       return nextSession.accessToken;
     } catch { return null; }
-  };
+    })();
+    refreshingSessionRef.current = refreshPromise;
+    try { return await refreshPromise; } finally { refreshingSessionRef.current = null; }
+  }, [session]);
   useEffect(() => {
     if (!session) return;
     const interval = window.setInterval(() => { void refreshActiveSession(); }, 10 * 60_000);
@@ -530,6 +536,7 @@ function Friends({ accessToken, onRefreshSession, onBack }: { accessToken: strin
   const [presenceStatus, setPresenceStatus] = useState<PresenceStatus>("ONLINE");
   const [friendCode, setFriendCode] = useState<string | null>(null);
   const [savingPresence, setSavingPresence] = useState(false);
+  const refreshAttemptedRef = useRef(false);
   useEffect(() => {
     const page = document.querySelector<HTMLElement>(".friends-page");
     page?.setAttribute("id", "friends-content");
@@ -540,7 +547,8 @@ function Friends({ accessToken, onRefreshSession, onBack }: { accessToken: strin
       const headers = { Authorization: `Bearer ${token}` };
       const [friendsResponse, requestsResponse, profileResponse, outgoingResponse] = await Promise.all([fetch(FRIENDS_API_URL, { headers }), fetch(`${FRIENDS_API_URL}/requests`, { headers }), fetch(`${PROFILE_API_URL}/me`, { headers }), fetch(`${FRIENDS_API_URL}/requests/outgoing`, { headers })]);
       const responses = [friendsResponse, requestsResponse, profileResponse];
-      if (canRefresh && responses.some((response) => response.status === 401 || response.status === 403)) {
+      if (canRefresh && !refreshAttemptedRef.current && responses.some((response) => response.status === 401 || response.status === 403)) {
+        refreshAttemptedRef.current = true;
         const refreshedToken = await onRefreshSession();
         if (refreshedToken) return loadWithToken(refreshedToken, false);
       }
@@ -551,6 +559,7 @@ function Friends({ accessToken, onRefreshSession, onBack }: { accessToken: strin
       const profile = await profileResponse.json() as { presenceStatus: PresenceStatus; friendCode?: string };
       setPresenceStatus(profile.presenceStatus);
       setFriendCode(profile.friendCode ?? null);
+      refreshAttemptedRef.current = false;
       setStatus("ready");
     };
     try { await loadWithToken(accessToken, true); } catch { setStatus("error"); }
